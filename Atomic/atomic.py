@@ -417,6 +417,8 @@ removes all containers based on an image.
     def gen_cmd(self,cargs):
         args = []
         for c in cargs:
+            c = c.replace("${IMAGE}", self.image)
+            c = c.replace("${NAME}", self.name)
             if c == "IMAGE":
                 args.append(self.image)
                 continue

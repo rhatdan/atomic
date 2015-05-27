@@ -18,14 +18,14 @@ IMAGE.
 
 If the container image has a LABEL RUN instruction like the following:
 
-```LABEL RUN /usr/bin/docker run -t -i --rm --cap_add=SYS_ADMIN --net=host -v ${LOGDIR}:/var/log -v ${DATADIR}:/var/lib --name NAME IMAGE```
+```LABEL RUN /usr/bin/docker run -t -i --rm --cap_add=SYS_ADMIN --net=host -v \${LOGDIR}:/var/log -v \${DATADIR}:/var/lib --name NAME IMAGE```
 
 If this field does not exist, `atomic run` defaults to the following:
-```/usr/bin/docker run -t -i --rm -v ${LOGDIR}:/var/log -v ${DATADIR}:/var/lib --name NAME IMAGE```
+```/usr/bin/docker run -t -i --rm -v \${LOGDIR}:/var/log -v \${DATADIR}:/var/lib --name NAME IMAGE```
 
 These defaults are suggested values for your container images.
 
-atomic will replace the NAME and IMAGE fields with the name and image specified via the command,  NAME will be replaced with IMAGE if it is not specified.
+`atomic run` will replace the NAME, ${NAME}, IMAGE and ${IMAGE} fields with the name and image specified via the command,  NAME will be replaced with IMAGE if it is not specified.
 
 # OPTIONS:
 **--help**
