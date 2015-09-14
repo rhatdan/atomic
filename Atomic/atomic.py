@@ -1,3 +1,4 @@
+import shutil
 import sys
 import os
 import argparse
@@ -375,8 +376,27 @@ class Atomic(object):
         command += self.image
         return command
 
+    def runc(self):
+        self.inspect = self._inspect_container()
+        if not self.inspect:
+            self.update()
+            self.inspect = self._inspect_image()
+        c = self.d.create_container(self.name)
+        try:
+            container_dir = "/var/lib/atomic/%s" % self.name
+            if os.path.exists(container_dir):
+                shutil.rmtree(container_dir)
+            os.makedirs(container_dir)
+            ps = subprocess.Popen(("/usr/bin/docker", "export", c["Id"]), stdout=subprocess.PIPE)
+            output = subprocess.check_output(('tar', "-C", container_dir, "-xf", "-"), stdin=ps.stdout)
+            ps.wait()
+        finally:
+            self.d.remove_container(c["Id"])
+
     def run(self):
         missing_RUN = False
+        if self.args.runc:
+            return self.runc()
         self.inspect = self._inspect_container()
 
         if self.inspect:
