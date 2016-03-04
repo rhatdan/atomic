@@ -360,8 +360,6 @@ class Atomic(object):
             if image:
                 return self.d.inspect_image(image)
             return self.d.inspect_image(self.image)
-        except docker.errors.APIError:
-            pass
         except requests.exceptions.ConnectionError:
             raise NoDockerDaemon()
 
@@ -372,8 +370,7 @@ class Atomic(object):
             name = self.name
         try:
             return self.d.inspect_container(name)
-        except docker.errors.APIError:
-            pass
+
         except requests.exceptions.ConnectionError as e:
             raise NoDockerDaemon()
         return None
