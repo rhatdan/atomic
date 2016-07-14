@@ -2,13 +2,6 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-#With the inclusion of this PR (https://github.com/projectatomic/atomic/pull/294)
-#atomic storage export/import will only work with docker 1.10 support.
-#Skip this test, until we move to docker 1.10.
-
-echo "WARNING: skipping test_migrate.sh since it is only supported with docker 1.10 onwards."
-exit 0
-
 #
 # 'atomic storage' integration tests (non-live)
 # AUTHOR: Shishir Mahajan <shishir dot mahajan at redhat dot com>
