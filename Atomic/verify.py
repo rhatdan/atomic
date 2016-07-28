@@ -6,9 +6,21 @@ from operator import itemgetter
 from .atomic import AtomicError
 
 class Verify(Atomic):
+    @staticmethod
+    def get_default_signer():
+        d = util.get_atomic_config()
+        return None if "default_signer" not in d else d["default_signer"]
+
     def __init__(self):
         super(Verify, self).__init__()
         self.debug = False
+
+    def sign(self):
+        layer = self._get_layer(self.image)
+        if not self.args.signby:
+            raise ValueError("You must specify signer")
+        sigpath = "%s/%s-%s.sig" % (util.signature_path(), self.image, self.args.signby)
+        print(util.skopeo_sign(layer, "HOWDOIGETMANIFEST", "HOWDOIGETFINGERPRINT", sigpath))
 
     def verify(self):
         """
@@ -28,6 +40,9 @@ class Verify(Atomic):
                 if layer['Tag'] is not "" and layer['Name'] is "":
                     layer['Name'] = layer['Tag']
             return layers
+
+        if self.sign:
+            return self.sign()
 
         # Set debug bool
         self.set_debug()
@@ -72,6 +87,10 @@ class Verify(Atomic):
             else:
                 # Didn't detect any version differences, do nothing
                 pass
+
+        layer = self._get_layer(self.image)
+        sigpath = "%s/%s.sig" % (util.signature_path(), self.image)
+        print(util.skopeo_verify(layer, "HOWDOIGETMANIFEST", "HOWDOIGETFINGERPRINT", sigpath))
 
     def get_tagged_images(self, names, layers):
         """

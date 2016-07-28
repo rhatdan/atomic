@@ -661,6 +661,11 @@ def create_parser(help_text):
         epilog="atomic verify checks whether there is a newer image "
         "available and scans through all layers to see if any of "
         "the sublayers have a new version available")
+    verifyp.add_argument("-s", "--sign",  default=False,
+                          action="store_true",
+                          help=_("Create and sign signature file for the selected images"))
+    verifyp.add_argument("--sign-by", default=Verify.get_default_signer(),  dest="signby",
+                          help=_("Choose alternative signer to create and sign signature file for the selected images"))
     verifyp.set_defaults(_class=Verify, func='verify')
     verifyp.add_argument("image", help=_("container image"))
     verifyp.add_argument("-v", "--verbose", default=False,
@@ -669,6 +674,7 @@ def create_parser(help_text):
     return parser
 
 if __name__ == '__main__':
+    aparser = None
     try:
         atomic = Atomic.Atomic()
         aparser = create_parser(atomic.help())
@@ -689,8 +695,12 @@ if __name__ == '__main__':
         sys.exit(e.returncode)
     except AttributeError:
         # python3 throws exception on no args to atomic
-        aparser.print_usage()
+        if aparser:
+            aparser.print_usage()
+        else:
+            traceback.print_exc(file=sys.stdout)
         sys.exit(1)
+
     except MountError as e:
         if str(e).find("Permission denied") > 0:
             need_root()

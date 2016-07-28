@@ -1,5 +1,6 @@
 # Installation directories.
 PREFIX ?= $(DESTDIR)/usr
+PKIDIR ?= $(DESTDIR)/etc/pki/atomic
 SYSCONFDIR ?= $(DESTDIR)/etc/sysconfig
 PROFILEDIR ?= $(DESTDIR)/etc/profile.d
 PYTHON ?= /usr/bin/python
@@ -66,6 +67,8 @@ install-only:
 
 	[ -d $(SYSCONFDIR) ] || mkdir -p $(SYSCONFDIR)
 	install -m 644 atomic.sysconfig $(SYSCONFDIR)/atomic
+
+	[ -d $(PKIDIR) ] || mkdir -p $(PKIDIR)
 
 	[ -d $(PROFILEDIR) ] || mkdir -p $(PROFILEDIR)
 	install -m 644 atomic.sh $(PROFILEDIR)

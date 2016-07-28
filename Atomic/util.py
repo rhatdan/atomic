@@ -205,6 +205,25 @@ def urllib3_disable_warnings():
             if hasattr(urllib3, 'disable_warnings'):
                 urllib3.disable_warnings()
 
+
+def skopeo_sign(image, manifest, fingerprint, sigpath):
+    # Create a signature using  local  files.
+    cmd = ['skopeo', 'standalone-sign', manifest, image, fingerprint, "-o", sigpath]
+    try:
+        results = subp(cmd)
+    except OSError:
+        raise ValueError("skopeo must be installed to perform signing")
+    return results
+
+def skopeo_verify(image, manifest, fingerprint, sigpath):
+    # Verify a signature using  local  files.
+    cmd = ['skopeo', 'standalone-reference', manifest, image, fingerprint, "-o", sigpath]
+    try:
+        results = subp(cmd)
+    except OSError:
+        raise ValueError("skopeo must be installed to perform signing")
+    return results
+
 def skopeo_inspect(image, args=None):
     if not args:
         args=[]
@@ -343,6 +362,13 @@ def default_docker():
         default_docker.cache = atomic_config.get('default_docker','docker')
     return default_docker.cache
 default_docker.cache = None
+
+def signature_path():
+    if not signature_path.cache:
+        atomic_config = get_atomic_config()
+        default_docker.cache = atomic_config.get('signature_path','/etc/pki/atomic')
+    return signature_path.cache
+signature_path.cache = None
 
 def default_docker_lib():
     if not default_docker_lib.cache:
