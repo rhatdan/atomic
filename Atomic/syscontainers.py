@@ -286,8 +286,6 @@ class SystemContainers(object):
         unitfile = os.path.join(exports, "service.template")
         tmpfiles = os.path.join(exports, "tmpfiles.template")
 
-        util.write_out("Extracting to %s" % destination)
-
         if hasattr(self.args, 'display') and self.args.display:
             return
 
