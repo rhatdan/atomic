@@ -286,7 +286,7 @@ class SystemContainers(object):
         unitfile = os.path.join(exports, "service.template")
         tmpfiles = os.path.join(exports, "tmpfiles.template")
 
-        if hasattr(self.args, 'display') and self.args.display:
+        if self.args.get('display', False):
             return
 
         if self.user:

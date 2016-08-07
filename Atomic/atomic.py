@@ -97,7 +97,7 @@ class Atomic(object):
                     self.d.remove_container(c["Id"], force=True)
 
     def update(self):
-        if hasattr(self.args, 'container') and self.args.container:
+        if self.args.get('container', False):
             if self.syscontainers.get_system_container_checkout(self.args.image):
                 return self.syscontainers.update_system_container(self.args.image)
             raise ValueError("Container '%s' is not installed" % self.args.image)
@@ -306,17 +306,17 @@ class Atomic(object):
         os.environ['NAME'] = self.name or ""
         os.environ['IMAGE'] = self.image or ""
 
-        if hasattr(self.args, 'opt1') and self.args.opt1:
+        if self.args.get('opt1', False):
             os.environ['OPT1'] = self.args.opt1
 
-        if hasattr(self.args, 'opt2') and self.args.opt2:
+        if self.args.get('opt2', False):
             os.environ['OPT2'] = self.args.opt2
 
-        if hasattr(self.args, 'opt3') and self.args.opt3:
+        if self.args.get('opt3', False):
             os.environ['OPT3'] = self.args.opt3
 
-        if not hasattr(self.args, 'PWD'):
-            os.environ['PWD'] = os.getcwd()
+        if not hasattr(os.environ, 'PWD'):
+            os.environ['PWD'] = self.args.get('PWD', os.getcwd())
 
         default_uid = "0"
         with open("/proc/self/loginuid") as f:
