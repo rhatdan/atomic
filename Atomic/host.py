@@ -117,7 +117,7 @@ class Host(Atomic):
             argv.append("--pretty")
         if self.args.json:
             argv.append("--json")
-        self._rpmostree(argv)
+        self._rpmostree(argv + self.args.args)
 
     def host_upgrade(self):
         argv = ["upgrade"]
@@ -129,13 +129,13 @@ class Host(Atomic):
             argv.append("--check-diff")
         if self.args.downgrade:
             argv.append("--allow-downgrade")
-        self._rpmostree(argv)
+        self._rpmostree(argv + self.args.args)
 
     def host_rollback(self):
         argv = ["rollback"]
         if self.args.reboot:
             argv.append("--reboot")
-        self._rpmostree(argv)
+        self._rpmostree(argv + self.args.args)
 
     def host_rebase(self):
         argv = ["rebase", self.args.refspec]
@@ -151,13 +151,13 @@ class Host(Atomic):
             argv.append("--os=" % self.args.os)
         if self.args.preview:
             argv.append("--preview")
-        self._rpmostree(argv)
+        self._rpmostree(argv + self.args.args)
 
     def host_unlock(self):
         argv = ['unlock']
         if self.args.hotfix:
             argv.append("--hotfix")
-        self._ostreeadmin(argv)
+        self._ostreeadmin(argv + self.args.args)
 
     def host_install(self):
         argv = ['install']
