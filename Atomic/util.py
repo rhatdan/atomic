@@ -20,6 +20,11 @@ try:
 except ImportError:
     from urllib.parse import urlparse #pylint: disable=no-name-in-module,import-error
 
+try:
+    from subprocess import DEVNULL  # pylint: disable=no-name-in-module,unused-import
+except ImportError:
+    DEVNULL = open(os.devnull, 'wb')
+
 # Atomic Utility Module
 
 ReturnTuple = collections.namedtuple('ReturnTuple',

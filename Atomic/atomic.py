@@ -5,11 +5,7 @@ import pipes
 import argparse
 from .client import AtomicDocker
 from .syscontainers import SystemContainers
-
-try:
-    from subprocess import DEVNULL  # pylint: disable=no-name-in-module
-except ImportError:
-    DEVNULL = open(os.devnull, 'wb')
+from .util import DEVNULL
 
 import requests
 

@@ -6,12 +6,7 @@ import os
 from . import util
 from .Export import export_docker
 from .Import import import_docker
-from .util import NoDockerDaemon, default_docker_lib
-
-try:
-    from subprocess import DEVNULL  # pylint: disable=no-name-in-module
-except ImportError:
-    DEVNULL = open(os.devnull, 'wb')
+from .util import NoDockerDaemon, default_docker_lib, DEVNULL
 
 try:
     from . import Atomic

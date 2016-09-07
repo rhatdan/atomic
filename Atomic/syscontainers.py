@@ -11,6 +11,7 @@ import stat
 import subprocess
 import time
 from .client import AtomicDocker
+from .util import DEVNULL
 from ctypes import cdll, CDLL
 from dateutil.parser import parse as dateparse
 
@@ -24,11 +25,6 @@ try:
         OSTREE_PRESENT = False
 except ImportError:
     OSTREE_PRESENT = False
-
-try:
-    from subprocess import DEVNULL  # pylint: disable=no-name-in-module
-except ImportError:
-    DEVNULL = open(os.devnull, 'wb')
 
 HOME = os.path.expanduser("~")
 
