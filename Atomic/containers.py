@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 
@@ -6,6 +7,7 @@ from . import Atomic
 from .client import AtomicDocker
 import datetime
 from dateutil.parser import parse as dateparse
+from docker.errors import NotFound, APIError
 
 try:
     from subprocess import DEVNULL  # pylint: disable=no-name-in-module
@@ -18,6 +20,22 @@ def cli(subparser):
     containers_subparser = c.add_subparsers(title='images subcommands',
                                             description="operate on images",
                                             help='additional help')
+    # atomic containers delete
+    delete_parser = containers_subparser.add_parser("delete",
+                                                help=_("delete specified containers"))
+    delete_parser.set_defaults(_class=Containers, func='delete_image')
+    delete_parser.add_argument("-f", "--force", action='store_true',
+                               dest="force",
+                               default=False,
+                               help=_("Force removal of specified running containers"))
+    delete_parser.add_argument("-a", "--all", action='store_true',dest="all",
+                               default=False,
+                               help=_("Delete all containers"))
+    delete_parser.set_defaults(_class=Containers, func='delete')
+    delete_parser.add_argument("containers", nargs=argparse.REMAINDER,
+                               help=_("container container(s)"))
+
+
     # atomic containers list
     pss = containers_subparser.add_parser("list",
                                           help=_("list the containers"),
@@ -194,3 +212,20 @@ class Containers(Atomic):
                 return False
 
         return True
+
+    def delete(self):
+        results = 0
+        targets = self.args.containers
+        if self.args.all:
+            targets = [m["Id"] for m in self.get_containers()]
+
+        for target in targets:
+            try:
+                self.d.remove_container(target, force=self.args.force)
+            except NotFound as e:
+                util.write_err("Failed to delete container {}: {}".format(target, e))
+                results += 1
+            except APIError as e:
+                util.write_err("Failed operation for delete container {}: {}".format(target, e))
+                results += 1
+        return results
