@@ -35,7 +35,6 @@ def cli(subparser):
     delete_parser.add_argument("containers", nargs=argparse.REMAINDER,
                                help=_("container container(s)"))
 
-
     # atomic containers list
     pss = containers_subparser.add_parser("list",
                                           help=_("list the containers"),
@@ -60,6 +59,15 @@ def cli(subparser):
                                             epilog="Discard unused blocks (fstrim) on rootfs of running containers.")
     trimp.set_defaults(_class=Containers, func='fstrim')
 
+    # atomic containers size
+    size_parser = containers_subparser.add_parser("size",
+                                                  help=_("Estimate the file space usage of specified containers"))
+    size_parser.add_argument("-a", "--all", action='store_true',dest="all",
+                             default=False,
+                             help=_("Get Size of all containers"))
+    size_parser.add_argument("containers", nargs=argparse.REMAINDER,
+                             help=_("container container(s)"))
+    
 class Containers(Atomic):
 
     def fstrim(self):
