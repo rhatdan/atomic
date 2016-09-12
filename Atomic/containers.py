@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import math
 
 from . import util
 from . import Atomic
@@ -53,11 +54,6 @@ def cli(subparser):
                      help=_("Don't truncate output"))
     pss.add_argument("-q", "--quiet", action='store_true', dest="quiet", default=False,
                      help=_("Only display container IDs"))
-    # atomic containers trim
-    trimp = containers_subparser.add_parser("trim",
-                                            help=_("discard unused blocks (fstrim) on running containers"),
-                                            epilog="Discard unused blocks (fstrim) on rootfs of running containers.")
-    trimp.set_defaults(_class=Containers, func='fstrim')
 
     # atomic containers size
     size_parser = containers_subparser.add_parser("size",
@@ -67,7 +63,14 @@ def cli(subparser):
                              help=_("Get Size of all containers"))
     size_parser.add_argument("containers", nargs=argparse.REMAINDER,
                              help=_("container container(s)"))
-    
+    size_parser.set_defaults(_class=Containers, func='size')
+
+    # atomic containers trim
+    trimp = containers_subparser.add_parser("trim",
+                                            help=_("discard unused blocks (fstrim) on running containers"),
+                                            epilog="Discard unused blocks (fstrim) on rootfs of running containers.")
+    trimp.set_defaults(_class=Containers, func='fstrim')
+
 class Containers(Atomic):
 
     def fstrim(self):
@@ -256,3 +259,16 @@ class Containers(Atomic):
                 util.write_err("Failed to delete container {}: {}".format(target, e))
                 results += 1
         return results
+
+    def size(self):
+        def pprint(size, power=1000):
+            size = abs(size)
+            if (size==0):
+                return "0B"
+            units = ['B','KB','MB','GB','TB','PB','EB','ZB','YB']
+            p = math.floor(math.log(size, 2)/10)
+            return "%.1f %s" % (size/math.pow(power,p),units[int(p)])
+
+        for c in self.d.containers(all=self.args.all, size=1):
+            rw_size=c['SizeRw'] if "SizeRw" in c else 0
+            print(c["Id"], pprint(c['SizeRootFs']), pprint(rw_size))
