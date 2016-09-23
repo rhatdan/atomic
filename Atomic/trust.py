@@ -70,7 +70,7 @@ def cli(subparser):
     showp.set_defaults(_class=Trust, func="show")
 
 class Trust(Atomic):
-    def __init__(self, policy_filename="/etc/containers/policy.json"):
+    def __init__(self, policy_filename=util.POLICYFILE_NAME):
         """
         :param policy_filename: override policy filename
         """
@@ -296,7 +296,7 @@ class Trust(Atomic):
         else:
             sigstoreimage = '/'.join([registry, _img])
         try:
-            data = util.skopeo_inspect("docker://" + sigstoreimage, args=None)
+            data = util.skopeo_inspect("docker://" + sigstoreimage, args=None, policy_filename=self.policy_filename)
         except ValueError:
             data = None
         if data:

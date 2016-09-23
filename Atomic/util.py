@@ -33,6 +33,7 @@ GOMTREE_PATH = "/usr/bin/gomtree"
 BWRAP_OCI_PATH = "/usr/bin/bwrap-oci"
 RUNC_PATH = "/bin/runc"
 SKOPEO_PATH = "/usr/bin/skopeo"
+POLICYFILE_NAME = "/etc/containers/policy.conf"
 
 def gomtree_available():
     return os.path.exists(GOMTREE_PATH)
@@ -278,7 +279,10 @@ def urllib3_disable_warnings():
             if hasattr(urllib3, 'disable_warnings'):
                 urllib3.disable_warnings()
 
-def skopeo_inspect(image, args=None, return_json=True, newline=False):
+def skopeo_inspect(image, args=None, return_json=True, newline=False, policy_filename=None):
+    if not policy_filename:
+        policy_filename=POLICY_FILENAME
+
     if not args:
         args=[]
 
@@ -294,7 +298,7 @@ def skopeo_inspect(image, args=None, return_json=True, newline=False):
     # docker configuration. If so, then use false in the future.  This
     # is complicated by the fact that CIDR notation can be used in the
     # docker conf
-    cmd = [SKOPEO_PATH, '--tls-verify=false', 'inspect'] + args + [image]
+    cmd = [SKOPEO_PATH, '--tls-verify=false', '--policy=%s' % policy_filename, 'inspect'] + args + [image]
     try:
         results = subp(cmd, newline=newline)
     except OSError:
