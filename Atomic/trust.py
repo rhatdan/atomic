@@ -70,7 +70,7 @@ def cli(subparser):
     showp.set_defaults(_class=Trust, func="show")
 
 class Trust(Atomic):
-    def __init__(self, policy_filename=util.POLICYFILE_NAME):
+    def __init__(self, policy_filename=util.POLICY_FILENAME):
         """
         :param policy_filename: override policy filename
         """

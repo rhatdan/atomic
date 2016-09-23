@@ -33,7 +33,7 @@ GOMTREE_PATH = "/usr/bin/gomtree"
 BWRAP_OCI_PATH = "/usr/bin/bwrap-oci"
 RUNC_PATH = "/bin/runc"
 SKOPEO_PATH = "/usr/bin/skopeo"
-POLICYFILE_NAME = "/etc/containers/policy.conf"
+POLICY_FILENAME = "/etc/containers/policy.conf"
 
 def gomtree_available():
     return os.path.exists(GOMTREE_PATH)
