@@ -6,7 +6,8 @@ atomic \- Atomic Management Tool
 
 # SYNOPSIS
 **atomic** [OPTIONS] COMMAND [arg...]
-  {diff,host,images,info,install,mount,run,scan,stop,storage,uninstall,unmount,update,upload,verify,version}
+  {containers,diff,images,install,mount,pull,push,run,scan,sign,stop,storage,migrate,top,trust,uninstall,unmount,umount,update,verify,version}
+
 [**-h**|**--help**]
 
 # DESCRIPTION
@@ -34,11 +35,11 @@ overridden with the _ATOMIC_CONF_ environment variable
 overridden with the _ATOMIC_CONFD_ environment variable.
 
 # COMMANDS
+**atomic-containers(1)**
+operations on installed containers
+
 **atomic-diff(1)**
 show the differences between two images|containers' RPMs
-
-**atomic-help(1)**
-show help associated with a container or image
 
 **atomic-host(1)**
 execute commands to manage an Atomic host.
@@ -46,10 +47,7 @@ execute commands to manage an Atomic host.
 Note: only available on atomic host platforms.
 
 **atomic-images(1)**
-operations on locally installed container images
-
-**atomic-info(1)**
-execute read and display LABEL information about a container image
+operations on container images
 
 **atomic-install(1)**
 execute commands on installed images
@@ -69,6 +67,9 @@ execute image run method (default)
 **atomic-scan(1)**
 scan an image or container for CVEs
 
+**atomic-sign(1)**
+sign an image
+
 **atomic-stop(1)**
 execute container image stop method
 
@@ -78,6 +79,9 @@ manage the container storage on the system
 **atomic-top(1)**
 display a top-like list of container processes
 
+**atomic-trust(1)**
+manage system container trust policy
+
 **atomic-uninstall(1)**
 uninstall container from system
 
@@ -86,13 +90,6 @@ unmount previously mounted image or container
 
 **atomic-update(1)**
 Downloads the latest container image. 
-
-**atomic-verify(1)**
-verify image is fully updated
-
-**atomic-version(1)**
-display image 'Name Version Release' label
-
 
 # CONNECTING TO DOCKER ENGINE
 

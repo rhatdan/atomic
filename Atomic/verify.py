@@ -6,18 +6,22 @@ from operator import itemgetter
 from .atomic import AtomicError
 from .syscontainers import SystemContainers
 from .mount import Mount
+import argparse
 import shutil
 import itertools
 import tempfile
 import subprocess
 
-def cli(subparser):
+def cli(subparser, hidden=False):
     # atomic verify
-    verifyp = subparser.add_parser(
-        "verify", help=_("verify image is fully updated"),
-        epilog="atomic verify checks whether there is a newer image "
-        "available and scans through all layers to see if any of "
-        "the sublayers have a new version available")
+    if hidden:
+        verifyp = subparser.add_parser("verify", argument_default=argparse.SUPPRESS)
+    else:
+        verifyp = subparser.add_parser(
+            "verify", help=_("verify image is fully updated"),
+            epilog="atomic verify checks whether there is a newer image "
+            "available and scans through all layers to see if any of "
+            "the sublayers have a new version available")
     verifyp.set_defaults(_class=Verify, func='verify')
     verifyp.add_argument("image", help=_("container image"))
     verifyp.add_argument("-v", "--verbose", default=False,
@@ -96,7 +100,7 @@ class Verify(Atomic):
         # Set debug bool
         self.set_debug()
 
-        if self.syscontainers.has_system_container_image(self.image):
+        if self.syscontainers.has_image(self.image):
             imgs = self.syscontainers.get_system_images()
             for img in imgs:
                 if img['Id'].startswith(self.image):
@@ -235,7 +239,7 @@ class Verify(Atomic):
                                        if x['Id'] == iid] for _repo in repos]
         results = []
         for repo_ in similar:
-            (reg, _, _) = util.decompose(repo_)
+            (reg, _, _, _) = util.decompose(repo_)
             results.append(self.is_registry_local(reg))
         return all(results)
 

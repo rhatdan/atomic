@@ -17,6 +17,7 @@ from . import util
 import re
 from .util import NoDockerDaemon, DockerObjectNotFound
 from docker.errors import NotFound
+from .discovery import RegistryInspect
 
 def find_repo_tag(d, Id, image_name):
     def image_in_repotags(image_name, repotags):
@@ -67,6 +68,7 @@ class Atomic(object):
         self.syscontainers = SystemContainers()
         self.run_opts = None
         self.atomic_config = util.get_atomic_config()
+        self.local_tokens = {}
 
     def __enter__(self):
         return self
@@ -99,8 +101,8 @@ class Atomic(object):
 
     def update(self):
         if hasattr(self.args, 'container') and self.args.container:
-            if self.syscontainers.get_system_container_checkout(self.args.image):
-                return self.syscontainers.update_system_container(self.args.image)
+            if self.syscontainers.get_checkout(self.args.image):
+                return self.syscontainers.update(self.args.image)
             raise ValueError("Container '%s' is not installed" % self.args.image)
         elif self.setvalues:
             raise ValueError("--set is valid only when used with --system")
@@ -108,7 +110,11 @@ class Atomic(object):
         self.ping()
         if self.force:
             self.force_delete_containers()
-        return util.check_call([self.docker_binary(), "pull", self.image])
+        fq_name = self.get_fq_image_name(self.image)
+        registry, _, _, _ = util.decompose(fq_name)
+        return util.skopeo_copy("docker://{}".format(self.image),
+                                "docker-daemon:{}".format(fq_name),
+                                util.is_insecure_registry(self.d.info()['RegistryConfig'], util.strip_port(registry)))
 
     def pull(self):
         prevstatus = ""
@@ -250,7 +256,7 @@ class Atomic(object):
     def _inspect_image(self, image=None):
         image = image or self.image
         try:
-            if self.syscontainers.has_system_container_image(image):
+            if self.syscontainers.has_image(image):
                 return self.syscontainers.inspect_system_image(image)
             return self.d.inspect_image(image)
         except (NotFound, requests.exceptions.ConnectionError):
@@ -384,7 +390,7 @@ class Atomic(object):
 
     def _container_exists(self, name):
         try:
-            return self.syscontainers.get_system_container_checkout(name) or self._inspect_container(name)
+            return self.syscontainers.get_checkout(name) or self._inspect_container(name)
         except ValueError:
             return None
 
@@ -590,10 +596,10 @@ class Atomic(object):
         except AtomicError:
             pass
 
-        if self.syscontainers.has_system_container_image(identifier):
+        if self.syscontainers.has_image(identifier):
             return identifier
 
-        if self.syscontainers.get_system_container_checkout(identifier):
+        if self.syscontainers.get_checkout(identifier):
             return identifier
 
         raise DockerObjectNotFound(identifier)
@@ -630,7 +636,7 @@ class Atomic(object):
         if not self.containers:
             self.containers = self.d.containers(all=True)
 
-        return self.containers + self.syscontainers.get_system_containers()
+        return self.containers + self.syscontainers.get_containers()
 
     def get_active_containers(self, refresh=False):
         '''
@@ -674,6 +680,42 @@ class Atomic(object):
             return vuln_ids
         except IOError:
             return []
+
+    def get_local_tokens(self):
+        if len(self.local_tokens) < 1:
+            self.local_tokens = self.load_local_tokens()
+        return self.local_tokens
+
+    @staticmethod
+    def load_local_tokens():
+        tokens = {}
+        token_file_name = os.path.expanduser('~/.docker/config.json')
+        if not os.path.exists(token_file_name):
+            return {}
+        with open(token_file_name) as token_file:
+            token_data = json.load(token_file)
+        try:
+            for registry in token_data['auths']:
+                tokens[registry] = token_data['auths'][registry]['auth']
+        except KeyError:
+            # Just return a blank dict
+            pass
+        return tokens
+
+    def get_fq_image_name(self, input_image):
+        registry, repo, image, tag = util.decompose(input_image)
+        if not image:
+            raise ValueError('Error parsing input: "{}" invalid'.format(input_image))
+        if all([True if x else False for x in [registry, image, tag]]):
+            img = registry
+            if repo:
+                img += "/{}".format(repo)
+            img += "/{}:{}".format(image, tag)
+            return img
+        if not registry:
+            ri = RegistryInspect(registry, repo, image, tag, debug=self.args.debug, orig_input=self.image)
+            return ri.find_image_on_registry()
+
 
 class AtomicError(Exception):
     pass

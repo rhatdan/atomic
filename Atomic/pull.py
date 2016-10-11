@@ -2,32 +2,55 @@ try:
     from . import Atomic
 except ImportError:
     from atomic import Atomic  # pylint: disable=relative-import
-from .util import skopeo_copy, get_atomic_config, skopeo_inspect, decompose, write_out
+from .trust import Trust
+from .util import skopeo_copy, get_atomic_config, decompose, write_out, strip_port, is_insecure_registry
 
 ATOMIC_CONFIG = get_atomic_config()
 
 
 def cli(subparser):
     # atomic pull
-    backend = ATOMIC_CONFIG.get('default_storage', "ostree")
+    storage = ATOMIC_CONFIG.get('default_storage', "docker")
     pullp = subparser.add_parser("pull", help=_("pull latest image from a repository"),
                                  epilog="pull the latest specified image from a repository.")
     pullp.set_defaults(_class=Pull, func='pull_image')
-    pullp.add_argument("--storage", dest="backend", default=backend,
+    pullp.add_argument("--storage", dest="storage", default=storage,
                        help=_("Specify the storage. Default is currently '%s'.  You can"
                               " change the default by editing /etc/atomic.conf and changing"
-                              " the 'default_storage' field." % backend))
+                              " the 'default_storage' field." % storage))
+    pullp.add_argument("-t", "--type", dest="reg_type", default=None,
+                       help=_("Pull from an alternative registry type."))
     pullp.add_argument("image", help=_("image id"))
 
 
 class Pull(Atomic):
+    def __init__(self, policy_filename=None):
+        """
+        :param policy_filename: override policy filename
+        """
+        super(Pull, self).__init__()
+        self.policy_filename=policy_filename
+
     def pull_docker_image(self):
-        _, _, tag = decompose(self.args.image)
-        # If no tag is given, we assume "latest"
-        tag = tag if tag != "" else "latest"
-        fq_name = skopeo_inspect("docker://{}".format(self.args.image))['Name']
-        image = "docker-daemon:{}:{}".format(fq_name, tag)
-        skopeo_copy("docker://{}".format(self.args.image), image, debug=self.args.debug)
+        self.ping()
+        # Add this when atomic registry is incorporated.
+        # if self.args.reg_type == "atomic":
+        #     pull_uri = 'atomic:'
+        # else:
+        #     pull_uri = 'docker://'
+        fq_name = self.get_fq_image_name(self.args.image)
+        registry, _, _, tag = decompose(fq_name)
+        image = "docker-daemon:{}".format(self.args.image)
+        if not self.args.image.endswith(tag):
+            image += ":{}".format(tag)
+        insecure = True if is_insecure_registry(self.d.info()['RegistryConfig'], strip_port(registry)) else False
+        trust = Trust()
+        trust.set_args(self.args)
+        trust.discover_sigstore(fq_name)
+        write_out("Pulling {} ...".format(fq_name))
+        skopeo_copy("docker://{}".format(fq_name), image,
+                    debug=self.args.debug, insecure=insecure,
+                    policy_filename=self.policy_filename)
 
     def pull_image(self):
         handlers = {
@@ -35,9 +58,8 @@ class Pull(Atomic):
             "docker" : self.pull_docker_image
         }
 
-        handler = handlers.get(self.args.backend)
+        handler = handlers.get(self.args.storage)
         if handler is None:
             raise ValueError("Destination not known, please choose --storage=%s" % "|".join(handlers.keys()))
-        write_out("Image %s is being pulled to %s ..." % (self.args.image, self.args.backend))
+        write_out("Image %s is being pulled to %s ..." % (self.args.image, self.args.storage))
         handler()
-

@@ -1,6 +1,7 @@
 import argparse
 import errno
 import shlex
+import pwd
 import sys
 import json
 import subprocess
@@ -17,11 +18,8 @@ import tempfile
 import shutil
 import re
 import requests
-try:
-    from urlparse import urlparse #pylint: disable=import-error
-except ImportError:
-    from urllib.parse import urlparse #pylint: disable=no-name-in-module,import-error
-
+import ipaddress
+import socket
 # Atomic Utility Module
 
 ReturnTuple = collections.namedtuple('ReturnTuple',
@@ -34,7 +32,7 @@ ATOMIC_VAR_LIB = os.environ.get('ATOMIC_VAR_LIB', '/var/lib/atomic')
 GOMTREE_PATH = "/usr/bin/gomtree"
 BWRAP_OCI_PATH = "/usr/bin/bwrap-oci"
 RUNC_PATH = "/bin/runc"
-
+SKOPEO_PATH = "/usr/bin/skopeo"
 
 def gomtree_available():
     return os.path.exists(GOMTREE_PATH)
@@ -55,20 +53,62 @@ def check_if_python2():
 
 input, is_python2 = check_if_python2() # pylint: disable=redefined-builtin
 
+
+def get_registries():
+    registries = []
+    with AtomicDocker() as c:
+        dconf = c.info()
+    search_regs = [x['Name'] for x in dconf['Registries']]
+    rconf = dconf['RegistryConfig']['IndexConfigs']
+    # docker.io is special
+    if 'docker.io' in rconf:
+        registries.append({'hostname': 'registry-1.docker.io', 'name': 'docker.io', 'search': True, 'secure': True})
+        # remove docker.io
+        del(rconf['docker.io'])
+    for i in rconf:
+        search_bool = True if i in search_regs else False
+        registries.append({'hostname': i, 'name': i, 'search': search_bool, 'secure': rconf[i]['Secure'] })
+    return registries
+
+
 def decompose(compound_name):
-    # '[reg/]repo[:tag]' -> (reg, repo, tag)
-    reg, repo, tag = '', compound_name, ''
+    def is_network_address(_input):
+        try:
+            socket.gethostbyname(_input)
+        except socket.gaierror:
+            return False
+        return True
+
+    reg, repo, image, tag = '', compound_name, '', ''
     if '/' in repo:
         reg, repo = repo.split('/', 1)
+        if not is_network_address(reg):
+            repo = '{}/{}'.format(reg, repo)
+            reg = ''
     if ':' in repo:
         repo, tag = repo.rsplit(':', 1)
-    return reg, repo, tag
+    if "/" in repo:
+        repo, image = repo.rsplit("/", 1)
+    if not image and repo:
+        image = repo
+        repo = ''
+    if reg == 'docker.io' and repo == '':
+        repo = 'library'
+    if not tag:
+        tag = "latest"
+
+    if reg and not repo and not is_network_address(repo):
+        repo = reg
+        reg = ''
+
+    return str(reg), str(repo), str(image), str(tag)
+
 
 def image_by_name(img_name, images=None):
     # Returns a list of image data for images which match img_name. Will
     # optionally take a list of images from a docker.Client.images
     # query to avoid multiple docker queries.
-    i_reg, i_rep, i_tag = decompose(img_name)
+    i_reg, i_rep, i_img, i_tag = decompose(img_name)
 
     # Correct for bash-style matching expressions.
     if not i_reg:
@@ -86,15 +126,14 @@ def image_by_name(img_name, images=None):
         if not i["RepoTags"]:
             continue
         for t in i['RepoTags']:
-            reg, rep, tag = decompose(t)
+            reg, rep, d_image, tag = decompose(t)
             if matches(reg, i_reg) \
                     and matches(rep, i_rep) \
-                    and matches(tag, i_tag):
+                    and matches(tag, i_tag) \
+                    and matches(d_image, i_img):
                 valid_images.append(i)
                 break
-            # Some repo after decompose end up with the img_name
-            # at the end.  i.e. rhel7/rsyslog
-            if rep.endswith(img_name):
+            if matches(i_img, d_image) and matches(i_tag, tag):
                 valid_images.append(i)
                 break
     return valid_images
@@ -256,17 +295,22 @@ def skopeo_inspect(image, args=None, return_json=True, newline=False):
     # Performs remote inspection of an image on a registry
     # :param image: fully qualified name
     # :param args: additional parameters to pass to Skopeo
-    # :return: Returns json formatted data
+    # :param fail_silent: return false if failed
+    # :return: Returns json formatted data or false
 
-    cmd = ['skopeo', 'inspect'] + args + [image]
+    # Adding in --verify-tls=false to deal with the change in skopeo
+    # policy. The prior inspections were also false.  We need to define
+    # a way to determine if the registry is insecure according to the
+    # docker configuration. If so, then use false in the future.  This
+    # is complicated by the fact that CIDR notation can be used in the
+    # docker conf
+    cmd = [SKOPEO_PATH, '--tls-verify=false', 'inspect'] + args + [image]
     try:
         results = subp(cmd, newline=newline)
     except OSError:
         raise ValueError("skopeo must be installed to perform remote inspections")
     if results.return_code is not 0:
-        # Need to check if we are dealing with a v1 registry
-        check_v1_registry(image)
-        raise ValueError("Unable to interact with this registry: {}".format(results.stderr))
+        raise ValueError(results)
     else:
         if return_json:
             return json.loads(results.stdout.decode('utf-8'))
@@ -284,15 +328,13 @@ def skopeo_delete(image, args=None):
     if not args:
         args=[]
 
-    cmd = ['skopeo', 'delete'] + args + [image]
+    cmd = [SKOPEO_PATH, 'tls-verify=false', 'delete'] + args + [image]
     try:
         results = subp(cmd)
     except OSError:
         raise ValueError("skopeo must be installed to perform remote operations")
     if results.return_code is not 0:
-        # Only v2 registries supported
-        check_v1_registry(image)
-        raise ValueError("Unable to interact with this registry: {}".format(results.stderr))
+        raise ValueError(results)
     else:
         return True
 
@@ -311,11 +353,10 @@ def skopeo_layers(image, args=None, layers=None):
     success = False
     temp_dir = tempfile.mkdtemp()
     try:
-        args = ['skopeo', 'layers'] + args + [image] + layers
+        args = ['skopeo', '--tls-verify=false', 'layers'] + args + [image] + layers
         r = subp(args, cwd=temp_dir)
         if r.return_code != 0:
-            check_v1_registry(image)
-            raise ValueError("Unable to interact with this registry: {}".format(r.stderr))
+            raise ValueError(r)
         success = True
     except OSError:
         raise ValueError("skopeo must be installed to perform remote inspections")
@@ -325,7 +366,7 @@ def skopeo_layers(image, args=None, layers=None):
     return temp_dir
 
 def skopeo_standalone_sign(image, manifest_file_name, fingerprint, signature_path, debug=False):
-    cmd = ['skopeo']
+    cmd = [SKOPEO_PATH]
     if debug:
         cmd = cmd + ['--debug']
     cmd = cmd + ['standalone-sign', manifest_file_name, image,
@@ -333,28 +374,35 @@ def skopeo_standalone_sign(image, manifest_file_name, fingerprint, signature_pat
     return check_call(cmd)
 
 def skopeo_manifest_digest(manifest_file, debug=False):
-    cmd = ['skopeo']
+    cmd = [SKOPEO_PATH]
     if debug:
         cmd = cmd + ['--debug']
     cmd = cmd  + ['manifest-digest', manifest_file]
     return check_output(cmd).rstrip().decode()
 
-def skopeo_copy(source, destination, debug=False):
-    cmd = ['skopeo']
+def skopeo_copy(source, destination, debug=False, sign_by=None, insecure=False, policy_filename=None):
+
+    cmd = [SKOPEO_PATH]
+    if policy_filename:
+        cmd = cmd + [ "--policy=%s" % policy_filename ]
+
     if debug:
         cmd = cmd + ['--debug']
+    if insecure:
+        cmd = cmd + ['--tls-verify=false']
     cmd = cmd + ['copy']
-    if destination.startswith("docker-daemon"):
+    if destination.startswith("docker"):
         cmd = cmd + ['--remove-signatures']
+    elif destination.startswith("atomic") and not sign_by:
+        cmd = cmd + ['--remove-signatures']
+
+    if sign_by:
+        cmd = cmd + ['--sign-by', sign_by]
     cmd = cmd + [source, destination]
+    if debug:
+        write_out("Executing: {}".format(" ".join(cmd)))
     return check_call(cmd)
 
-def check_v1_registry(image):
-    # Skopeo cannot interact with a v1 registry
-    netloc = (urlparse(image)).netloc
-    v1_url = "https://{}/v1/_ping".format(netloc)
-    if requests.get(v1_url).status_code == 200:
-        raise ValueError("\nUnable to interact with a V1 registry.")
 
 class NoDockerDaemon(Exception):
     def __init__(self):
@@ -365,13 +413,17 @@ class DockerObjectNotFound(ValueError):
     def __init__(self, msg):
         super(DockerObjectNotFound, self).__init__("Unable to associate '{}' with an image or container".format(msg))
 
-def get_atomic_config():
-    # Returns the atomic configuration file (/etc/atomic.conf)
-    # in a dict
-    # :return: dict based structure of the atomic config file
-    if not os.path.exists(ATOMIC_CONF):
-        raise ValueError("{} does not exist".format(ATOMIC_CONF))
-    with open(ATOMIC_CONF, 'r') as conf_file:
+def get_atomic_config(atomic_config=None):
+    """
+    Get the atomic configuration file (/etc/atomic.conf) as a dict
+    :param atomic_conf: path to override atomic.conf, primarily for testing
+    :return: dict based structure of the atomic config file
+    """
+    if not atomic_config:
+        atomic_config = ATOMIC_CONF
+    if not os.path.exists(atomic_config):
+        raise ValueError("{} does not exist".format(atomic_config))
+    with open(atomic_config, 'r') as conf_file:
         return yaml_load(conf_file)
 
 def add_opt(sub):
@@ -379,7 +431,7 @@ def add_opt(sub):
     sub.add_argument("--opt2", dest="opt2",help=argparse.SUPPRESS)
     sub.add_argument("--opt3", dest="opt3",help=argparse.SUPPRESS)
 
-def get_atomic_config_item(config_items, atomic_config=None):
+def get_atomic_config_item(config_items, atomic_config=None, default=None):
     """
     Lookup and return the atomic configuration file value
     for a given structure. Returns None if the option
@@ -400,7 +452,11 @@ def get_atomic_config_item(config_items, atomic_config=None):
         return yaml_struct
     if atomic_config is None:
         atomic_config = get_atomic_config()
-    return _recursive_get(atomic_config, config_items)
+    val = _recursive_get(atomic_config, config_items)
+    if val:
+        return val
+    else:
+        return default
 
 def get_scanners():
     scanners = []
@@ -411,11 +467,10 @@ def get_scanners():
         with open(f, 'r') as conf_file:
             try:
                 temp_conf = yaml_load(conf_file)
-            except YAMLError:
-                write_err("Error: Unable to load scannerfile %s.  Continuing..." %f)
-            try:
                 if temp_conf.get('type') == "scanner":
                     scanners.append(temp_conf)
+            except YAMLError:
+                write_err("Error: Unable to load scannerfile %s.  Continuing..." %f)
             except AttributeError:
                 pass
     return scanners
@@ -584,8 +639,11 @@ def expandvars(path, environ=None):
     return path
 
 def get_registry_configs(yaml_dir):
+    # Returns a dictionary of registries and a str of the default_store if applicable
     regs = {}
     default_store = None
+    if not os.path.exists(yaml_dir):
+        return None, default_store
     # Get list of files that end in .yaml and are in fact files
     for yaml_file in [os.path.join(yaml_dir, x) for x in os.listdir(yaml_dir) if x.endswith('.yaml')
             and os.path.isfile(os.path.join(yaml_dir, x))]:
@@ -606,8 +664,11 @@ def get_registry_configs(yaml_dir):
                 for k,v in registries.items():
                     if k not in regs:
                         regs[k] = v
+                        # Add filename of yaml into registry config
+                        regs[k]['filename'] = yaml_file
                     else:
                         raise ValueError("There is a duplicate entry for {} in {}".format(k, yaml_dir))
+
             except ScannerError:
                 raise ValueError("{} appears to not be properly formatted YAML.".format(yaml_file))
     return regs, default_store
@@ -627,9 +688,89 @@ def have_match_registry(fq_name, reg_config):
 def get_signature_write_path(reg_info):
     # Return the defined path for where signatures should be written
     # or none if no entry is found
-    return reg_info.get('sigstore-write', reg_info.get('sigstore', None))
+    return reg_info.get('sigstore-staging', reg_info.get('sigstore', None))
 
 def get_signature_read_path(reg_info):
     # Return the defined path for where signatures should be read
     # or none if no entry is found
     return reg_info.get('sigstore', None)
+
+def strip_port(_input):
+    ip, _, _ = _input.rpartition(':')
+    if ip == '':
+        return _input
+    return ip.strip("[]")
+
+def is_insecure_registry(registry_config, registry):
+    if is_python2 and not isinstance(registry, unicode): #pylint: disable=undefined-variable,unicode-builtin
+        registry = unicode(registry) #pylint: disable=unicode-builtin,undefined-variable
+
+    ip_registries = []
+    ipv4_regs = []
+    ipv6_regs = []
+    registry_ips = []
+
+    def is_ipv4(_ip):
+        if is_python2 and not isinstance(_ip, unicode): #pylint: disable=unicode-builtin,undefined-variable
+            _ip = unicode(_ip) #pylint: disable=unicode-builtin,undefined-variable
+        if ipaddress.ip_address(_ip).version == 4:
+            return True
+        return False
+
+    def get_ips_from_host(_host):
+        return list(set([x[4][0] for x in socket.getaddrinfo(_host, None)]))
+
+    try:
+        ipaddress.ip_address(registry)
+        registry_ips.append(registry)
+    except ValueError:
+        for r in get_ips_from_host(registry):
+            registry_ips.append(r)
+
+    insecure_cidrs = registry_config['InsecureRegistryCIDRs']
+    insecure_registries = [strip_port(v['Name']) for _, v in registry_config['IndexConfigs'].items() if not v['Secure']]
+    for i in insecure_registries:
+        try:
+            ipaddress.ip_address(i)
+            ip_registries.append(i)
+        except ValueError:
+            for j in get_ips_from_host(i):
+                ip_registries.append(j)
+
+    for ip in ip_registries:
+        if is_ipv4(ip):
+            ipv4_regs.append(ip)
+        else:
+            ipv6_regs.append(ip)
+
+    # Everything is now in IP notation or CIDR
+    for registry_ip in registry_ips:
+        # Check IP addresses associated with known insecure registries
+        if is_python2 and not isinstance(registry_ip, unicode): #pylint: disable=unicode-builtin, undefined-variable
+            registry_ip = unicode(registry_ip) #pylint: disable=unicode-builtin, undefined-variable
+        if registry_ip in ipv4_regs or registry_ip in ipv6_regs:
+            return True
+        # Check if the IP falls in the the CIDR notation
+        for cidr_subnet in insecure_cidrs:
+            if ipaddress.ip_address(registry_ip ) in ipaddress.ip_network(cidr_subnet):
+                return True
+
+def getgnuhome():
+    defaulthome = get_atomic_config_item(['gnupg_homedir'])
+    if defaulthome:
+        return defaulthome
+
+    try:
+        fd=open("/proc/self/loginuid")
+        uid=int(fd.read())
+        fd.close()
+        return ("%s/.gnupg" % pwd.getpwuid(uid).pw_dir)
+    except (KeyError, IOError):
+        if "SUDO_UID" in os.environ:
+            uid = int(os.environ["SUDO_UID"])
+        else:
+            uid = os.getuid()
+    try:
+        return ("%s/.gnupg" % pwd.getpwuid(uid).pw_dir)
+    except KeyError:
+        return None

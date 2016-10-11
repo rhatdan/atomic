@@ -1,5 +1,8 @@
 from . import Atomic
 from . import util
+from . import info
+from . import verify
+from . import help as Help
 from .mount import Mount
 from .delete import Delete
 import os
@@ -23,10 +26,40 @@ def convert_size(size):
 
 def cli(subparser):
     # atomic images
-    imagesp = subparser.add_parser("images")
+    imagesp = subparser.add_parser("images",
+                                   help=_("operate on images"))
     images_subparser = imagesp.add_subparsers(title='images subcommands',
                                               description="operate on images",
                                               help='additional help')
+
+    # atomic images delete
+    delete_parser = images_subparser.add_parser("delete",
+                                                help=_("mark image for deletion"),
+                                                epilog="Marks image. registry garbage-collection "
+                                                "when invoked will recover used disk space")
+    delete_parser.set_defaults(_class=Delete, func='delete_image')
+
+    deletegroup = delete_parser.add_mutually_exclusive_group()
+    deletegroup.add_argument("-f", "--force", default=False, dest="force",
+                             action="store_true",
+                             help=_("Force removal of local images, even if containers based on it exist.  Default is False"))
+
+    deletegroup.add_argument("--remote", default=False, dest="remote",
+                             action="store_true",
+                             help=_("Delete image from remote repository"))
+
+    delete_parser.add_argument("delete_targets", nargs=argparse.ONE_OR_MORE,
+                               help=_("container image(s)"))
+
+    if util.gomtree_available():
+        generate_parser = images_subparser.add_parser("generate",
+                                                  help=_("generate image 'manifests' if missing"))
+        generate_parser.set_defaults(_class=Images, func='generate_validation_manifest')
+
+
+    Help.cli(images_subparser)
+
+    info.cli(images_subparser)
 
     # atomic images list
     list_parser = images_subparser.add_parser("list",
@@ -57,24 +90,6 @@ def cli(subparser):
     list_parser.add_argument("--json", action='store_true',dest="json", default=False,
                              help=_("print in a machine parseable form"))
 
-    # atomic images delete
-    delete_parser = images_subparser.add_parser("delete",
-                                                help=_("mark image for deletion"),
-                                                epilog="Marks image. registry garbage-collection "
-                                                "when invoked will recover used disk space")
-    delete_parser.set_defaults(_class=Delete, func='delete_image')
-
-    delete_parser.add_argument("-f", "--force", default=False, dest="force_delete",
-                               action="store_true",
-                               help=_("Delete image without user confirmation"))
-
-    delete_parser.add_argument("--remote", default=False, dest="remote_delete",
-                               action="store_true",
-                               help=_("Delete image from remote repository"))
-
-    delete_parser.add_argument("delete_targets", nargs=argparse.ONE_OR_MORE,
-                               help=_("container image(s)"))
-
     prune_parser = images_subparser.add_parser("prune",
                                                help=_("delete unused 'dangling' images"),
                                                epilog="Using the prune command, "
@@ -82,11 +97,9 @@ def cli(subparser):
                                                       "'dangling' images")
     prune_parser.set_defaults(_class=Delete, func='prune_images')
 
-    if util.gomtree_available():
-        generate_parser = images_subparser.add_parser("generate",
-                                                  help=_("generate image 'manifests' if missing"))
-        generate_parser.set_defaults(_class=Images, func='generate_validation_manifest')
+    verify.cli(images_subparser)
 
+    info.cli_version(images_subparser)
 
 class Images(Atomic):
     def __init__(self):

@@ -97,9 +97,8 @@ __atomic_image_repos_and_tags() {
 }
 
 __atomic_system_containers_images() {
-	local images
-	REPO_DIR=`test -e /etc/atomic.conf && grep "^ostree_repository:" /etc/atomic.conf | cut -d' ' -f2`
-	images="$(ostree --repo=${REPO_DIR:-/ostree/repo} refs | sed -n  -e '/ociimage/ { /-/ { s|ociimage/||;s|\(.*\)-|\1:|;p }}')"
+	local images="$(atomic images list --no-trunc -f type=system |
+			awk 'NR>1 { if ($1 == ">" || $1 == "*") print $2; else print $1; }')"
 	COMPREPLY+=( $(compgen -W "$images" -- "$cur") )
 }
 
@@ -108,6 +107,11 @@ __atomic_system_containers_containers() {
 	CHECKOUT_DIR=`test -e /etc/atomic.conf && grep "^checkout_path:" /etc/atomic.conf | cut -d' ' -f2`
 	containers="$(ls -1 ${CHECKOUT_DIR:-/var/lib/containers/atomic/} | grep -v \.[01]$)"
 	COMPREPLY+=( $(compgen -W "$containers" -- "$cur") )
+}
+
+__atomic_system_containers_containers_running() {
+        local containers=( $(atomic containers list --no-trunc -q -f runtime=runc) )
+        COMPREPLY+=( $(compgen -W "${containers[*]}" -- "$cur") )
 }
 
 __atomic_image_repos_and_tags_and_ids() {
@@ -168,14 +172,14 @@ __atomic_to_extglob() {
 	echo "@($extglob)"
 }
 
-_atomic_help() {
+_atomic_images_help() {
 	local counter=$(__atomic_pos_first_nonflag)
 	if [ $cword -eq $counter ]; then
 		COMPREPLY=( $( compgen -W "${commands[*]}" -- "$cur" ) )
 	fi
 }
 
-_atomic_info() {
+_atomic_images_info() {
 	case "$cur" in
 		-*)
 			COMPREPLY=( $( compgen -W "-h" -- "$cur" ) )
@@ -283,7 +287,7 @@ _atomic_top() {
 	return 0
 }
 
-_atomic_verify() {
+_atomic_images_verify() {
 	case "$cur" in
 		-*)
 			COMPREPLY=( $( compgen -W "--no-validate" ) )
@@ -294,22 +298,87 @@ _atomic_verify() {
 	esac
 }
 
-_atomic_version() {
+_atomic_images_version() {
 	case "$cur" in
 		-*)
 			COMPREPLY=( $( compgen -W "--recurse -r" -- "$cur" ) )
 			;;
 		*)
 		    __atomic_image_repos_and_tags
+		    __atomic_system_containers_images
 		    ;;
 	esac
 }
 
 _atomic_pull() {
+	local options_with_args="
+	      -t --type
+	      --storage
+	"
+	local all_options="$options_with_args
+	      -h, --help
+	"
+
+	case "$prev" in
+		--storage)
+			COMPREPLY=( $( compgen -W "docker ostree" -- "$cur" ) )
+			;;
+		-t | --type)
+			COMPREPLY=( $( compgen -W "atomic docker" -- "$cur" ) )
+			;;
+		$options_with_args_glob )
+			return
+			;;
+	esac
+
 	case "$cur" in
 		-*)
-			COMPREPLY=( $( compgen -W "--storage" -- "$cur" ) )
+			COMPREPLY=( $( compgen -W "$all_options" -- "$cur" ) )
 			;;
+	esac
+}
+
+_atomic_push() {
+	local options_with_args="
+	      -U --url
+	      -u --username
+	      -p --password
+	      -a --activation_key
+	      -r --repository_id
+	      --sign-by
+	      -t --type
+	"
+
+	local all_options="$options_with_args
+	      -h, --help
+	      --pulp
+	      --satellite
+	      --verify_ssl
+	      --debug
+	      --all -a
+	      --force -f
+	      --help
+	"
+
+	local options_with_args_glob=$(__atomic_to_extglob "$options_with_args")
+
+	case "$prev" in
+		-t | --type)
+			COMPREPLY=( $( compgen -W "atomic docker" -- "$cur" ) )
+			;;
+		$options_with_args_glob )
+			return
+			;;
+	esac
+
+	case "$cur" in
+		-*)
+			COMPREPLY=( $( compgen -W "$all_options" -- "$cur" ) )
+			;;
+		*)
+		    __atomic_image_repos_and_tags
+		    ;;
+
 	esac
 }
 
@@ -397,14 +466,14 @@ _atomic_containers_list() {
 
 _atomic_containers_trim() {
 	local all_options="
-                --help
-        "
+		--help
+	"
 
 	case "$cur" in
-                -*)
-                        COMPREPLY=( $( compgen -W "$all_options" -- "$cur" ) )
-                        ;;
-        esac
+		-*)
+			COMPREPLY=( $( compgen -W "$all_options" -- "$cur" ) )
+			;;
+	esac
 }
 
 _atomic_update() {
@@ -493,7 +562,7 @@ _atomic_run() {
 			local counter=$( __atomic_pos_first_nonflag $( __atomic_to_alternatives "$options_with_args" ) )
 
 			if [ $cword -eq $counter ]; then
-				__atomic_image_repos_and_tags_and_ids
+				__atomic_containers_and_images
 			fi
 			;;
 	esac
@@ -536,10 +605,14 @@ _atomic_install() {
 
 _atomic_images() {
   local subcommands="
-    list
     delete
-    prune
     generate
+    help
+    info
+    list
+    prune
+    version
+    verify
   "
 
   __atomic_subcommands "$subcommands" && return
@@ -609,6 +682,7 @@ _atomic_images_delete() {
 	;;
       *)
 	__atomic_image_repos_and_tags
+	__atomic_system_containers_images
 	;;
   esac
 }
@@ -617,6 +691,7 @@ _atomic_sign() {
     local options_with_args="
 	  --sign-by
 	  -d --directory
+	  -g, --gnupghome
     "
     local all_options="$options_with_args
 	  --help -h
@@ -626,6 +701,10 @@ _atomic_sign() {
 
 	case "$prev" in
 		"-d"|"--directory")
+			COMPREPLY=( $( compgen -d "$cur" ) )
+			return 0
+			;;
+		"-g"|"--gnupghome")
 			COMPREPLY=( $( compgen -d "$cur" ) )
 			return 0
 			;;
@@ -652,6 +731,111 @@ _atomic_sign() {
 			;;
 	esac
 	return 0
+}
+
+_atomic_trust() {
+  local subcommands="
+    add
+    delete
+    default
+    show
+  "
+
+  __atomic_subcommands "$subcommands" && return
+
+  case "$cur" in
+    -*)
+      COMPREPLY=( $( compgen -W "--help" -- "$cur" ) )
+      ;;
+    *)
+      COMPREPLY=( $( compgen -W "$subcommands" -- "$cur" ) )
+      ;;
+  esac
+  return 0
+}
+
+_atomic_trust_default() {
+  local subcommands="
+    accept
+    reject
+  "
+  local all_options="$options_with_args
+		      --help -h
+		      "
+
+	local options_with_args_glob=$(__atomic_to_extglob "$options_with_args")
+
+	case "$cur" in
+		-*)
+			COMPREPLY=( $( compgen -W "$all_options" -- "$cur" ) )
+			;;
+		*)
+			COMPREPLY=( $( compgen -W "$subcommands" -- "$cur" ) )
+			;;
+	esac
+}
+_atomic_trust_add() {
+	local options_with_args="
+		--pubkeys -k
+		--sigstoretype
+		--type -t
+		--keytype
+		--sigstore -s
+	"
+	local all_options="$options_with_args
+		--help -h
+	"
+
+	local options_with_args_glob=$(__atomic_to_extglob "$options_with_args")
+
+	case "$prev" in
+		--keytype)
+			COMPREPLY=( $( compgen -W "GPGKeys" -- "$cur" ) )
+			;;
+		--sigstoretype)
+			COMPREPLY=( $( compgen -W "atomic local web" -- "$cur" ) )
+			;;
+		--type|-t)
+			COMPREPLY=( $( compgen -W "signedBy insecureAcceptAnything reject" -- "$cur" ) )
+			;;
+	esac
+
+	case "$cur" in
+		-*)
+			COMPREPLY=( $( compgen -W "$all_options" -- "$cur" ) )
+			;;
+		*)
+			local counter=$( __atomic_pos_first_nonflag $( __atomic_to_alternatives "$options_with_args" ) )
+			;;
+
+	esac
+}
+
+_atomic_trust_delete() {
+	local options_with_args="
+		--sigstoretype
+	"
+	local all_options="$options_with_args
+		--help -h
+	"
+
+	local options_with_args_glob=$(__atomic_to_extglob "$options_with_args")
+
+	case "$prev" in
+		--sigstoretype)
+			COMPREPLY=( $( compgen -W "atomic local web" -- "$cur" ) )
+			;;
+	esac
+
+	case "$cur" in
+		-*)
+			COMPREPLY=( $( compgen -W "$all_options" -- "$cur" ) )
+			;;
+		*)
+			local counter=$( __atomic_pos_first_nonflag $( __atomic_to_alternatives "$options_with_args" ) )
+			;;
+
+	esac
 }
 
 _atomic_mount() {
@@ -754,6 +938,7 @@ _atomic_stop() {
 			;;
 		*)
 			__atomic_containers_running
+			__atomic_system_containers_containers_running
 			;;
 	esac
 }
@@ -829,7 +1014,7 @@ _atomic_host_host() {
 	esac
 }
 
-_atomic_help() {
+_atomic_images_help() {
 	case "$cur" in
 		-*)
 			COMPREPLY=( $( compgen -W "$all_options" -- "$cur" ) )
@@ -1094,20 +1279,19 @@ _atomic() {
 		containers
 		host
 		diff
-		info
 		install
 		images
 		storage
 		mount
 		pull
+		push
 		rhost
 		run
 		scan
 		sign
 		stop
 		top
-		verify
-		version
+		trust
 		uninstall
 		unmount
 		update

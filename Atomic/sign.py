@@ -1,16 +1,25 @@
 from . import util
 from . import Atomic
+from . import discovery
 import os
 import tempfile
-from .atomic import AtomicError
-import re
+import json
+
+try:
+    from urlparse import urlparse #pylint: disable=import-error
+except ImportError:
+    from urllib.parse import urlparse #pylint: disable=no-name-in-module,import-error
 
 
 ATOMIC_CONFIG = util.get_atomic_config()
+READ_URIS = ['file', 'http', 'https']
+WRITE_URIS = ['file']
 
 def cli(subparser):
     # atomic sign
-    signer = ATOMIC_CONFIG.get('default_signer', None)
+    signer = util.get_atomic_config_item(['default_signer'])
+    gnupghome = util.getgnuhome()
+
     signp = subparser.add_parser("sign",
                                  help="Sign an image",
                                  epilog="Create a signature for an image which can be "
@@ -24,83 +33,104 @@ def cli(subparser):
                        default=None,
                        dest="signature_path",
                        help=_("Define an alternate directory to store signatures"))
+    signp.add_argument("-g", "--gnupghome",
+                       default=gnupghome,
+                       dest="gnupghome",
+                       help=_("Set the GNUPGHOME environment variable to "
+                              "use an alternate user's GPG keyring. "
+                              "Useful when running with sudo, "
+                              "e.g. set to '~/.gnupg'. "
+                              "Default is %s" % gnupghome
+                       ))
 
 class Sign(Atomic):
-    def sign(self):
+    def __init__(self):
+        super(Sign, self).__init__()
+
+    def sign(self, in_signature_path=None, images=None):
+        def no_reg_no_default_error(image, registry_path):
+            return "Unable to associate {} with configurations in {} and " \
+                   "no 'default_store' is defined.".format(image,
+                                                           registry_path)
+
+        if in_signature_path is None and getattr(self.args, 'signature_path', None) is not None:
+            in_signature_path = self.args.signature_path
+
+        if images is None:
+            images = self.args.images
 
         if self.args.debug:
             util.write_out(str(self.args))
 
         signer = self.args.sign_by
-        if signer is None:
+
+        if self.args.sign_by is None:
             raise ValueError("No default identity (default_signer) was defined in /etc/atomic.conf "
                              "and no --sign-by identity was provided.  You must provide an identity")
-        registry_config_path = util.get_atomic_config_item(["registry_confdir"], ATOMIC_CONFIG)
-        registry_config_path = '/etc/containers/registries.d' if registry_config_path is None else registry_config_path
+        registry_config_path = util.get_atomic_config_item(["registry_confdir"], ATOMIC_CONFIG, '/etc/containers/registries.d')
         registry_configs, default_store = util.get_registry_configs(registry_config_path)
 
-        for sign_image in self.args.images:
-            remote_inspect_info = util.skopeo_inspect("docker://{}".format(sign_image))
-            manifest = util.skopeo_inspect('docker://{}'.format(sign_image), args=['--raw'], return_json=False)
+        # we honor GNUPGHOME if set, override with atomic.conf, arg overrides all
+        if self.args.gnupghome:
+            os.environ['GNUPGHOME'] = self.args.gnupghome
+
+        for sign_image in images:
+            registry, repo, image, tag = util.decompose(sign_image)
+            ri = discovery.RegistryInspect(registry, repo, image, tag, debug=self.args.debug, orig_input=sign_image)
+            manifest = ri.rc.manifest_json
+
             try:
                 manifest_file = tempfile.NamedTemporaryFile(mode="wb", delete=False)
-                manifest_file.write(manifest)
+                manifest_file.write(json.dumps(manifest))
                 manifest_file.close()
                 manifest_hash = str(util.skopeo_manifest_digest(manifest_file.name))
-                _, _, tag = util.decompose(sign_image)
-                tag = ":{}".format(tag) if tag != "" else ":latest"
-                expanded_image_name = str(remote_inspect_info['Name'])
+                expanded_image_name = ri.assemble_fqdn(include_tag=True)
 
-                if self.args.signature_path:
-                    if not os.path.exists(self.args.signature_path):
-                        raise ValueError("The path {} does not exist".format(self.args.signature_path))
-                    fq_sig_path = os.path.join(self.args.signature_path,
-                                               self.get_sig_name(self.args.signature_path))
+                if in_signature_path:
+                    if not os.path.exists(in_signature_path):
+                        raise ValueError("The path {} does not exist".format(in_signature_path))
+                    signature_path = in_signature_path
+
 
                 else:
-                    reg, repo, _ = util.decompose(expanded_image_name)
+                    reg, repo, _, _ = util.decompose(expanded_image_name)
+                    if not registry_configs and not default_store:
+                        raise ValueError(no_reg_no_default_error(sign_image, registry_config_path))
                     reg_info = util.have_match_registry("{}/{}".format(reg, repo), registry_configs)
                     if not reg_info:
                         reg_info = default_store
-                    if not reg_info:
-                        raise ValueError("Unable to associate {} with "
-                                         "configurations in {} and no 'default-docker' "
-                                         "is defined.".format(sign_image, registry_config_path))
+
                     signature_path = util.get_signature_write_path(reg_info)
                     if signature_path is None:
                         raise ValueError("No write path for {}/{} was "
                                          "found in {}".format(reg, repo, registry_config_path))
+                    elif urlparse(signature_path).scheme not in WRITE_URIS:
+                        raise ValueError("Writing to {} is not supported. Use a supported scheme {} "
+                                         "instead.".format(urlparse(signature_path).scheme, WRITE_URIS))
 
                     # Deal with write path prepends
-                    if signature_path.startswith("file://"):
-                        signature_path = signature_path.replace("file://", "")
+                    if urlparse(signature_path).scheme in WRITE_URIS:
+                        signature_path = urlparse(signature_path).path
 
-                        # Make sure signature path exists
-                        if not os.path.exists(signature_path):
-                            raise ValueError("The signature path {} does not exist".format(signature_path))
+                    # Make sure signature path exists
+                    if not os.path.exists(signature_path):
+                        raise ValueError("The signature path {} does not exist".format(signature_path))
 
-                    sigstore_path = "{}/{}/{}@{}".format(signature_path, os.path.dirname(expanded_image_name),
-                                                         os.path.basename(expanded_image_name), manifest_hash)
-                    self.make_sig_dirs(sigstore_path)
-                    sig_name = self.get_sig_name(sigstore_path)
-                    fq_sig_path = os.path.join(sigstore_path, sig_name)
-                    if os.path.exists(fq_sig_path):
-                        raise ValueError("The signature {} already exists.  If you wish to "
-                                         "overwrite it, please delete this file first")
+                sigstore_path = "{}/{}/{}@{}".format(signature_path, os.path.dirname(expanded_image_name),
+                                                     os.path.basename(expanded_image_name), manifest_hash)
+                self.make_sig_dirs(sigstore_path)
+                sig_name = self.get_sig_name(sigstore_path)
+                fq_sig_path = os.path.join(sigstore_path, sig_name)
+                if os.path.exists(fq_sig_path):
+                    raise ValueError("The signature {} already exists.  If you wish to "
+                                     "overwrite it, please delete this file first")
 
-                util.skopeo_standalone_sign(expanded_image_name + tag, manifest_file.name,
+                util.skopeo_standalone_sign(expanded_image_name, manifest_file.name,
                                             self.get_fingerprint(signer), fq_sig_path)
                 util.write_out("Created: {}".format(fq_sig_path))
 
             finally:
                 os.remove(manifest_file.name)
-
-    def check_input_validity(self):
-        try:
-            for image in self.args.images:
-                self._is_image(image)
-        except AtomicError:
-            raise ValueError("{} is not a valid image".format(image))
 
     @staticmethod
     def get_fingerprint(signer):
@@ -117,37 +147,6 @@ class Sign(Atomic):
             # perhaps revisit directory permissions
             # when complete use-cases are known
             os.makedirs(sig_path)
-
-    @staticmethod
-    def get_sig_name2(sig_path):
-        def missing_ints(aoi):
-            # Returns a list of integers in range
-            start, end = 1, max(aoi) + 1
-            if start == end and start is not 1:
-                start = 1
-            _diff = sorted(set(range(start, end)).difference(aoi))
-            if len(_diff) == 0:
-                return end
-            else:
-                return min(_diff)
-
-        sigs = []
-        for sig in os.listdir(sig_path):
-            if re.match(r"signature-\b[0-9]+\b(?!\.[0-9])", sig):
-                sigs.append(int(sig.replace("signature-", "")))
-
-        sigs.sort()
-        if len(sigs) == 0:
-            return "signature-1"
-        # In the event signature-0 exists
-        if sigs[0] == 0:
-            del sigs[0]
-        missing = missing_ints(sigs)
-        if missing == 0:
-            sig_int = max(sigs) + 1
-        else:
-            sig_int = missing
-        return "signature-{}".format(sig_int)
 
     @staticmethod
     def get_sig_name(sig_path):

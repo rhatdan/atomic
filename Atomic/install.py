@@ -60,7 +60,7 @@ def cli(subparser):
                                              help=_('install a system container'))
         installp.add_argument("--rootfs", dest="remote",
                               help=_("choose an existing exploded container/image to use "
-                                     "its rootfs as a remote, read-only rootfs for the"
+                                     "its rootfs as a remote, read-only rootfs for the "
                                      "container to be installed"))
         installp.add_argument("--set", dest="setvalues",
                               action='append',
@@ -83,8 +83,8 @@ class Install(Atomic):
                 raise ValueError("--user does not work for privileged user")
             return self.syscontainers.install_user_container(self.image, self.name)
         elif self.system:
-            return self.syscontainers.install_system_container(self.image, self.name)
-        elif self.args.setvalues:
+            return self.syscontainers.install(self.image, self.name)
+        elif OSTREE_PRESENT and self.args.setvalues:
             raise ValueError("--set is valid only when used with --system or --user")
 
         self._check_if_image_present()
@@ -105,6 +105,11 @@ class Install(Atomic):
             if self.args.display:
                 self.display("Need to pull %s" % self.image)
                 return
+            _, _, _, tag = util.decompose(self.image)
+            # skopeo requires the use of tags or it will fail
+            # if not tag is found, use 'latest'
+            if not tag:
+                self.image += ":{}".format("latest")
             self.update()
             self.inspect = self._inspect_image()
 

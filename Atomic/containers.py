@@ -17,9 +17,10 @@ except ImportError:
 
 def cli(subparser):
     # atomic containers
-    c = subparser.add_parser("containers")
-    containers_subparser = c.add_subparsers(title='images subcommands',
-                                            description="operate on images",
+    c = subparser.add_parser("containers",
+                             help=_("operate on containers"))
+    containers_subparser = c.add_subparsers(title='containers subcommands',
+                                            description="operate on containers",
                                             help='additional help')
     # atomic containers delete
     delete_parser = containers_subparser.add_parser("delete",
@@ -29,12 +30,15 @@ def cli(subparser):
                                dest="force",
                                default=False,
                                help=_("Force removal of specified running containers"))
-    delete_parser.add_argument("-a", "--all", action='store_true',dest="all",
+    delete_group = delete_parser.add_mutually_exclusive_group()
+    delete_group.add_argument("-a", "--all", action='store_true',dest="all",
                                default=False,
                                help=_("Delete all containers"))
+    delete_group.add_argument("container", nargs='?', action="append", 
+                              help=_("Specify one or more containers. Must be final arguments."))
+    delete_parser.add_argument("containers", nargs=argparse.REMAINDER, 
+                               help=argparse.SUPPRESS)
     delete_parser.set_defaults(_class=Containers, func='delete')
-    delete_parser.add_argument("containers", nargs=argparse.REMAINDER,
-                               help=_("container container(s)"))
 
     # atomic containers list
     pss = containers_subparser.add_parser("list",
@@ -95,8 +99,6 @@ class Containers(Atomic):
                 info = self.syscontainers.get_container_runtime_info(container)
                 if 'status' in info:
                     status = info["status"]
-                    if 'created' in info:
-                        created = info['created']
 
                 if not self.args.all and status != "running":
                     continue
@@ -187,7 +189,7 @@ class Containers(Atomic):
         all_vuln_info = json.loads(self.get_all_vulnerable_info())
 
         # Collect the system containers
-        for i in self.syscontainers.get_system_containers():
+        for i in self.syscontainers.get_containers():
             i["vulnerable"] = i['Id'] in vuln_ids
             if i["vulnerable"]:
                 i["vuln_info"] = all_vuln_info[i['Id']]
@@ -201,7 +203,7 @@ class Containers(Atomic):
             ret["Type"] = "docker"
             ret["vulnerable"] = ret["Image"] in vuln_ids
             if ret["vulnerable"]:
-                ret["vuln_info"] = all_vuln_info[ret["ImageId"]]
+                ret["vuln_info"] = all_vuln_info[ret["Image"]]
             else:
                 ret["vuln_info"] = dict()
             all_containers.append(ret)
@@ -231,13 +233,14 @@ class Containers(Atomic):
         docker_targets=[]
         if self.args.all:
             for c in self.get_containers():
-                if c["Type"] == "system":
-                    sys_targets.append(c["Id"])
-                else:
-                    docker_targets.append(c["Id"])
+                docker_targets.append(c["Id"])
+            for c in self.syscontainers.get_containers():
+                sys_targets.append(c["Id"])
         else:
-            for c in self.args.containers:
-                if self.syscontainers.get_system_container_checkout(c):
+            if not self.args.container and len(self.args.containers) == 0:
+                raise ValueError("No containers selected")
+            for c in self.args.container + self.args.containers:
+                if self.syscontainers.get_checkout(c):
                     sys_targets.append(c)
                 else:
                     docker_targets.append(c)
@@ -254,7 +257,7 @@ class Containers(Atomic):
 
         for target in sys_targets:
             try:
-                self.syscontainers.uninstall_system_container(target)
+                self.syscontainers.uninstall(target)
             except IOError as e:
                 util.write_err("Failed to delete container {}: {}".format(target, e))
                 results += 1

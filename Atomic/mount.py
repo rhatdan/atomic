@@ -36,6 +36,11 @@ from gi.repository import GLib  # pylint: disable=no-name-in-module
 
 # Module for mounting and unmounting containerized applications.
 
+DMSETUP_PATH='/usr/sbin/dmsetup'
+LSBLK_PATH='/usr/bin/lsblk'
+MOUNT_PATH='/usr/bin/mount'
+FINDMNT_PATH='/usr/bin/findmnt'
+
 def cli_unmount(subparser):
     # atomic unmount
     unmountp = subparser.add_parser(
@@ -176,7 +181,7 @@ class Mount(Atomic):
         """
         table = '0 %d thin /dev/mapper/%s %s' %  (int(size)//512, pool, dm_id)
 
-        cmd = ['dmsetup', 'create', name, '--table', table]
+        cmd = [DMSETUP_PATH, 'create', name, '--table', table]
         r = util.subp(cmd)
         if r.return_code != 0:
             raise MountError('Failed to create thin device: %s' %
@@ -187,7 +192,7 @@ class Mount(Atomic):
         """
         Destroys a thin device via subprocess call.
         """
-        r = util.subp(['dmsetup', 'remove', '--retry', name])
+        r = util.subp([DMSETUP_PATH, 'remove', '--retry', name])
         if r.return_code != 0:
             raise MountError('Could not remove thin device:\n%s' %
                              r.stderr.decode(sys.getdefaultencoding()).split("\n")[0])
@@ -197,7 +202,7 @@ class Mount(Atomic):
         """
         Checks dmsetup to see if a device is already active
         """
-        cmd = ['dmsetup', 'info', device]
+        cmd = [DMSETUP_PATH, 'info', device]
         dmsetup_info = util.subp(cmd)
         for dm_line in dmsetup_info.stdout.split("\n"):
             line = dm_line.split(':')
@@ -210,7 +215,7 @@ class Mount(Atomic):
         """
         Returns the file system type (xfs, ext4) of a given device
         """
-        cmd = ['lsblk', '-o', 'FSTYPE', '-n', thin_pathname]
+        cmd = [LSBLK_PATH, '-o', 'FSTYPE', '-n', thin_pathname]
         fs_return = util.subp(cmd)
         return fs_return.stdout.strip()
 
@@ -219,7 +224,7 @@ class Mount(Atomic):
         """
         Subprocess call to mount dev at path.
         """
-        cmd = ['mount']
+        cmd = [MOUNT_PATH]
         if bind:
             cmd.append('--bind')
         if optstring:
@@ -543,7 +548,7 @@ class DockerMount(Mount):
 
         options += ['ro', 'lowerdir=' + ld, 'upperdir=' + ud, 'workdir=' + wd]
         optstring = ','.join(options)
-        cmd = ['mount', '-t', 'overlay', '-o', optstring, 'overlay',
+        cmd = [MOUNT_PATH, '-t', 'overlay', '-o', optstring, 'overlay',
                self.mountpoint]
         status = util.subp(cmd)
 
@@ -642,7 +647,7 @@ class DockerMount(Mount):
         """
         Returns the cid of the container mounted at mountpoint.
         """
-        cmd = ['findmnt', '-o', 'OPTIONS', '-n', self.mountpoint]
+        cmd = [FINDMNT_PATH, '-o', 'OPTIONS', '-n', self.mountpoint]
         r = util.subp(cmd)
         if r.return_code != 0:
             raise MountError('No devices mounted at that location.')
@@ -731,10 +736,10 @@ class OSTreeMount(Mount):
             raise MountError('xattr required to mount OSTree images.')
 
     def has_container(self, container_id):
-        return self.syscontainers.get_system_container_checkout(container_id)
+        return self.syscontainers.get_checkout(container_id)
 
     def has_image(self, image_id):
-        return self.syscontainers.has_system_container_image(image_id)
+        return self.syscontainers.has_image(image_id)
 
     def has_identifier(self, _id):
         return self.has_container(_id) or self.has_image(_id)
@@ -759,13 +764,13 @@ class OSTreeMount(Mount):
             if self.user:
                 raise MountError('Need to be root to mount a container.')
             typ = "container"
-            source = os.path.join(self.syscontainers.get_system_container_checkout(identifier), "rootfs")
+            source = os.path.join(self.syscontainers.get_checkout(identifier), "rootfs")
             Mount.mount_path(source, self.mountpoint, bind=True)
         elif has_image:
             typ = "image"
             if len(os.listdir(self.mountpoint)):
                 raise MountError('The destination path is not empty.')
-            self.syscontainers.extract_system_container(identifier, self.mountpoint)
+            self.syscontainers.extract(identifier, self.mountpoint)
             if not self.user:
                 Mount.mount_path(self.mountpoint, self.mountpoint, bind=True)
         else:

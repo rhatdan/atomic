@@ -1,5 +1,4 @@
 import getpass
-import json
 
 from . import util
 from . import pulp
@@ -10,7 +9,10 @@ try:
 except ImportError:
     from atomic import Atomic # pylint: disable=relative-import
 
+ATOMIC_CONFIG = util.get_atomic_config()
+
 def cli(subparser):
+    signer = ATOMIC_CONFIG.get('default_signer', None)
     # atomic push
     pushp = subparser.add_parser(
         "push", aliases=['upload'], help=_("push latest image to repository"),
@@ -32,10 +34,6 @@ def cli(subparser):
                          default=None,
                          action="store_true",
                          help=_("flag to verify ssl of registry"))
-    pushp.add_argument("--debug",
-                         default=None,
-                         action="store_true",
-                         help=_("debug mode"))
     pushp.add_argument("-U", "--url",
                          dest="url",
                          default=None,
@@ -57,6 +55,18 @@ def cli(subparser):
                          default=None,
                          dest="repo_id",
                          help=_("Repository ID"))
+    pushp.add_argument("-t", "--type", dest="reg_type", default=None,
+                       help=_("Push to an alternative registry type."))
+    pushp.add_argument("--sign-by", dest="sign_by", default=signer,
+                       help=_("Name of the signing key. Currently %s, "
+                              "default can be defined in /etc/atomic.conf" % signer))
+    pushp.add_argument("-g", "--gnupghome",
+                       default=None,
+                       dest="gnupghome",
+                       help=_("Set the GNUPGHOME environment variable to "
+                              "use an alternate user's GPG keyring for signing. "
+                              "Useful when running with sudo, "
+                              "e.g. set to '~/.gnupg'."))
     # pushp.add_argument("--activation_key_name",
     #                      default=None,
     #                      dest="activation_key_name",
@@ -71,12 +81,31 @@ def cli(subparser):
     #                      help=_("Organization Name"))
 
 class Push(Atomic):
-    def __init__(self):
+    def __init__(self, policy_filename=None):
+        """
+        :param policy_filename: override policy filename
+        """
         super(Push, self).__init__()
+        self.policy_filename=policy_filename
 
     def push(self):
+        def prompt():
+            if not self.args.username:
+                self.args.username = util.input("Registry Username: ")
+
+            if not self.args.password:
+                self.args.password = getpass.getpass("Registry Password: ")
+
         self.ping()
-        prevstatus = ""
+        if self.args.debug:
+            util.write_out(str(self.args))
+
+        # This allows a user to turn off signing when a global
+        # sign_by has been defined in /etc/atomic.conf and saves
+        # us from having to define something like --no-sign
+        if self.args.sign_by == "None":
+            self.args.sign_by = None
+
         # Priority order:
         # If user passes in a password/username/url/ssl flag, use that
         # If not, read from the config file
@@ -100,15 +129,12 @@ class Push(Atomic):
         if self.args.verify_ssl is None:
             self.args.verify_ssl = False
 
-        if not self.args.username:
-            self.args.username = util.input("Registry Username: ")
-
-        if not self.args.password:
-            self.args.password = getpass.getpass("Registry Password: ")
-
         if (self.args.satellite | self.args.pulp):
+            prompt()
             if not self.args.url:
                 self.args.url = util.input("URL: ")
+
+        sign = True if self.args.sign_by else False
 
         if self.args.pulp:
             return pulp.push_image_to_pulp(self.image, self.args.url,
@@ -133,19 +159,37 @@ class Push(Atomic):
                                                      self.args.debug)
 
         else:
-            self.d.login(self.args.username, self.args.password)
-            for line in self.d.push(self.image, stream=True):
-                bar = json.loads(line)
-                status = bar['status']
-                if prevstatus != status:
-                    util.write_out(status, "")
-                if 'id' not in bar:
-                    continue
-                if status == "Uploading":
-                    util.write_out(bar['progress'] + " ")
-                elif status == "Push complete":
-                    pass
-                elif status.startswith("Pushing"):
-                    util.write_out("Pushing: " + bar['id'])
+            reg, _, _, tag = util.decompose(self.image)
+            # Check if any local tokens exist
+            if reg not in [x for x in self.get_local_tokens()]:
+                # If we find a token for the registry, we don't
+                # prompt for a username or password
+                prompt()
 
-                prevstatus = status
+            if not tag:
+                raise ValueError("The image being pushed must have a tag")
+
+            if self.args.password and self.args.username:
+                self.d.login(username=self.args.username, password=self.args.password, registry=reg)
+
+            local_image = "docker-daemon:{}".format(self.image)
+            if self.args.reg_type == "atomic":
+                remote_image = "atomic:{}".format(self.image)
+            else:
+                remote_image = "docker://{}".format(self.image)
+
+            if sign and self.args.debug:
+                util.write_out("\nSigning with '{}'\n".format(self.args.sign_by))
+
+            insecure = True if util.is_insecure_registry(self.d.info()['RegistryConfig'], util.strip_port(reg)) else False
+
+            # We must push the file to the registry first prior to performing a
+            # local signature because the manifest file must be on the registry
+            return_code = util.skopeo_copy(local_image, remote_image, debug=self.args.debug,
+                                           policy_filename=self.policy_filename,
+                                           sign_by=self.args.sign_by if sign else None, insecure=insecure)
+
+            if return_code != 0:
+                raise ValueError("Pushing {} failed.".format(self.image))
+            if self.args.debug:
+                util.write_out("Pushed: {}".format(self.image))

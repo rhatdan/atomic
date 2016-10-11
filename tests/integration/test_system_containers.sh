@@ -47,11 +47,11 @@ export ATOMIC_OSTREE_CHECKOUT_PATH=${WORK_DIR}/checkout
 
 docker save atomic-test-system > ${WORK_DIR}/atomic-test-system.tar
 
-${ATOMIC} pull dockertar:/${WORK_DIR}/atomic-test-system.tar
+${ATOMIC} pull --storage ostree dockertar:/${WORK_DIR}/atomic-test-system.tar
 
 # Check that the branch is created in the OSTree repository
 ostree --repo=${ATOMIC_OSTREE_REPO} refs > refs
-assert_matches "ociimage/atomic-test-system-latest" refs
+assert_matches "ociimage/atomic-test-system_3Alatest" refs
 
 ${ATOMIC} images list > ${WORK_DIR}/images
 grep -q "atomic-test-system" ${WORK_DIR}/images
@@ -74,6 +74,8 @@ teardown () {
     runc delete $NAME &> /dev/null  || true
     runc kill $NAME-remote 9 &> /dev/null || true
     runc delete $NAME-remote &> /dev/null || true
+    runc kill $NAME-failed 9 &> /dev/null || true
+    runc delete $NAME-failed &> /dev/null || true
 
     # Ensure there is no systemd service left running
     systemctl stop $NAME &> /dev/null || true
@@ -82,6 +84,10 @@ teardown () {
     systemctl stop $NAME-remote &> /dev/null || true
     systemctl disable $NAME-remote &> /dev/null || true
     rm -rf /etc/systemd/system/${NAME}-remote.service || true
+    systemctl stop $NAME-failed &> /dev/null || true
+    systemctl disable $NAME-failed &> /dev/null || true
+    rm -rf /etc/systemd/system/${NAME}-failed.service || true
+    rm /etc/tmpfiles.d/${NAME}.conf || true
 }
 
 trap teardown EXIT
@@ -120,12 +126,33 @@ ${ATOMIC} containers list --all --no-trunc --filter id=test-system | grep "test-
 # Check the command is included in the output
 assert_matches "run.sh" ps.out
 
-systemctl stop ${NAME}
-
+# Testing for container states
 ${ATOMIC} containers list --all | grep "test-system" > ps.out
-assert_matches "exited" ps.out
+assert_matches "running" ps.out
 
-${ATOMIC} containers list --quiet > ps.out
+# A duplicate will fail due to using the same port
+${ATOMIC} install --name=${NAME}-failed --set=RECEIVER=${SECRET} --system oci:atomic-test-system
+systemctl start ${NAME}-failed
+${ATOMIC} containers list --all --no-trunc | grep "test-system" > ps.out
+assert_matches "failed" ps.out
+
+systemctl stop ${NAME}
+systemctl stop ${NAME}-failed
+${ATOMIC} uninstall ${NAME}-failed
+
+${ATOMIC} containers list --all --no-trunc | grep "test-system" > ps.out
+assert_matches "inactive" ps.out
+
+# Test that containers can be started/stopped with run/stop
+
+${ATOMIC} run ${NAME}
+${ATOMIC} containers list --all --no-trunc | grep "test-system" > ps.out
+assert_matches "running" ps.out
+${ATOMIC} stop ${NAME}
+${ATOMIC} containers list --all --no-trunc | grep "test-system" > ps.out
+assert_matches "inactive" ps.out
+
+${ATOMIC} containers list --no-trunc --quiet > ps.out
 assert_not_matches "test-system" ps.out
 
 test -e /etc/systemd/system/${NAME}.service
@@ -199,25 +226,35 @@ test \! -e ${ATOMIC_OSTREE_CHECKOUT_PATH}/${NAME}.0
 test \! -e ${ATOMIC_OSTREE_CHECKOUT_PATH}/${NAME}.1
 
 
-${ATOMIC} pull docker.io/busybox
-${ATOMIC} pull docker.io/busybox > second.pull.out
+${ATOMIC} pull --storage ostree docker:atomic-test-secret
+${ATOMIC} version atomic-test-secret > version.out
+assert_matches ${SECRET} version.out
+${ATOMIC} --assumeyes images delete -f atomic-test-secret
+
+${ATOMIC} pull --storage ostree docker.io/busybox
+${ATOMIC} pull --storage ostree busybox
+${ATOMIC} pull --storage ostree busybox > second.pull.out
 assert_not_matches "Pulling layer" second.pull.out
 
 ostree --repo=${ATOMIC_OSTREE_REPO} refs > refs
 assert_matches busybox refs
-${ATOMIC} images delete -f busybox
+${ATOMIC} --assumeyes images delete -f docker.io/busybox
+
+BUSYBOX_IMAGE_ID=$(${ATOMIC} images list -f type=system | grep busybox | awk '{print $3}')
+${ATOMIC} --assumeyes images delete -f ${BUSYBOX_IMAGE_ID}
+
 ostree --repo=${ATOMIC_OSTREE_REPO} refs > refs
 OUTPUT=$(! grep -c busybox refs)
 if test $OUTPUT \!= 0; then
     exit 1
 fi
-${ATOMIC} pull docker.io/busybox
+${ATOMIC} pull --storage ostree busybox
 ostree --repo=${ATOMIC_OSTREE_REPO} refs | grep busybox
 
 ${ATOMIC} verify busybox > verify.out
 assert_not_matches "contains images or layers that have updates" verify.out
 
-image_digest=$(ostree --repo=${ATOMIC_OSTREE_REPO} show --print-metadata-key=docker.manifest ociimage/busybox-latest | sed -e"s|.*Digest\": \"sha256:\([a-z0-9]\+\).*|\1|" | head -c 12)
+image_digest=$(ostree --repo=${ATOMIC_OSTREE_REPO} show --print-metadata-key=docker.manifest ociimage/busybox_3Alatest | sed -e"s|.*Digest\": \"sha256:\([a-z0-9]\+\).*|\1|" | head -c 12)
 ${ATOMIC} images list > images.out
 grep "busybox.*$image_digest" images.out
 
@@ -227,14 +264,14 @@ test $(wc -l < images.out) -lt $(wc -l < images.all.out)
 assert_matches '<none>' images.all.out
 assert_not_matches '<none>' images.out
 
-${ATOMIC} images delete -f busybox
+${ATOMIC} --assumeyes images delete -f busybox
 ${ATOMIC} images prune
 
 # Test there are still intermediate layers left after prune
 ${ATOMIC} images list -f type=system --all > images.all.out
 assert_matches "<none>" images.all.out
 
-${ATOMIC} images delete -f atomic-test-system
+${ATOMIC} --assumeyes images delete -f atomic-test-system
 ${ATOMIC} images prune
 
 # Test there are not intermediate layers left layers now

@@ -12,7 +12,6 @@ import subprocess
 import time
 from .client import AtomicDocker
 from ctypes import cdll, CDLL
-from dateutil.parser import parse as dateparse
 
 try:
     import gi
@@ -108,7 +107,7 @@ class SystemContainers(object):
                             stdin=DEVNULL,
                             stdout=DEVNULL,
                             stderr=DEVNULL)
-                        
+
     def set_args(self, args):
         self.args = args
 
@@ -154,9 +153,9 @@ class SystemContainers(object):
             raise ValueError("Cannot install the container: systemctl does not support --user")
 
         # Same entrypoint
-        return self.install_system_container(image, name)
+        return self.install(image, name)
 
-    def install_system_container(self, image, name):
+    def install(self, image, name):
         repo = self._get_ostree_repo()
         if not repo:
             raise ValueError("Cannot find a configured OSTree repo")
@@ -172,11 +171,11 @@ class SystemContainers(object):
 
         self._pull_image_to_ostree(repo, image, False)
 
-        if self.get_system_container_checkout(name):
+        if self.get_checkout(name):
             util.write_out("%s already present" % (name))
             return
 
-        return self._checkout_system_container(repo, name, image, 0, False, remote=self.args.remote)
+        return self._checkout(repo, name, image, 0, False, remote=self.args.remote)
 
     def _check_oci_configuration_file(self, conf_path, remote=None):
         with open(conf_path, 'r') as conf:
@@ -242,7 +241,7 @@ class SystemContainers(object):
             raise ValueError("The container's rootfs is set to remote, but the remote rootfs does not exist")
         return real_path
 
-    def _checkout_system_container(self, repo, name, img, deployment, upgrade, values=None, destination=None, extract_only=False, remote=None):
+    def _checkout(self, repo, name, img, deployment, upgrade, values=None, destination=None, extract_only=False, remote=None):
         destination = destination or "%s/%s.%d" % (self._get_system_checkout_path(), name, deployment)
         unitfileout, tmpfilesout = self._get_systemd_destination_files(name)
 
@@ -252,25 +251,58 @@ class SystemContainers(object):
                     raise ValueError("The file %s already exists." % f)
 
         try:
-            return self._do_checkout_system_container(repo, name, img, upgrade, values, destination, unitfileout, tmpfilesout, extract_only, remote)
+            return self._do_checkout(repo, name, img, upgrade, values, destination, unitfileout, tmpfilesout, extract_only, remote)
         except (ValueError, OSError) as e:
             try:
-                shutil.rmtree(destination)
+                if not extract_only:
+                    shutil.rmtree(destination)
             except OSError:
                 pass
             try:
-                if not upgrade:
+                if not extract_only and not upgrade:
                     shutil.rmtree(unitfileout)
+            except OSError:
+                pass
+            try:
+                if not extract_only and not upgrade:
+                    shutil.rmtree(tmpfilesout)
             except OSError:
                 pass
             raise e
 
-    def _do_checkout_system_container(self, repo, name, img, upgrade, values, destination, unitfileout, tmpfilesout, extract_only, remote):
+    # Accept both name and version Id, and return the ostree rev
+    def _resolve_image(self, repo, img):
+        imagebranch = SystemContainers._get_ostree_image_branch(img)
+        rev = repo.resolve_rev(imagebranch, True)[1]
+        if rev:
+            return imagebranch, rev
+
+        # if we could not find an image with the specified name, check if it is the prefix
+        # of an ID, and allow it only for tagged images.
+        if not str.isalnum(str(img)):
+            return None, None
+
+        tagged_images = [i for i in self.get_system_images(get_all=True, repo=repo) if i['RepoTags']]
+        matches = [i for i in tagged_images if i['Id'].startswith(img)]
+        if len(matches) == 1:
+            # only one image, use it
+            i = matches[0]
+            imagebranch = "%s%s" % (OSTREE_OCIIMAGE_PREFIX, SystemContainers._encode_to_ostree_ref(i['RepoTags'][0]))
+            return imagebranch, i['OSTree-rev']
+        elif len(matches) > 1:
+            # more than one match, error out
+            raise ValueError("more images matching prefix `%s`" % img)
+        return None, None
+
+    def _do_checkout(self, repo, name, img, upgrade, values, destination, unitfileout, tmpfilesout, extract_only, remote):
         if not values:
             values = {}
 
         remote_path = self._resolve_remote_path(remote)
-        imagebranch = SystemContainers._get_ostree_image_branch(img)
+
+        _, rev = self._resolve_image(repo, img)
+        if rev is None:
+            raise ValueError("Image %s not found" % img)
 
         if remote_path:
             remote_rootfs = os.path.join(remote_path, "rootfs")
@@ -322,7 +354,6 @@ class SystemContainers(object):
         else:
             os.makedirs(rootfs)
 
-        rev = repo.resolve_rev(imagebranch, False)[1]
         manifest = self._image_manifest(repo, rev)
 
         if not remote_path:
@@ -510,7 +541,13 @@ class SystemContainers(object):
         repo.open(None)
         return repo
 
-    def update_system_container(self, name):
+    def version(self, image):
+        image_inspect = self.inspect_system_image(image)
+        if image_inspect:
+            return image_inspect['ImageId']
+        return None
+
+    def update(self, name):
         repo = self._get_ostree_repo()
         if not repo:
             raise ValueError("Cannot find a configured OSTree repo")
@@ -546,22 +583,19 @@ class SystemContainers(object):
         if os.path.exists("%s/%s.%d" % (self._get_system_checkout_path(), name, next_deployment)):
             shutil.rmtree("%s/%s.%d" % (self._get_system_checkout_path(), name, next_deployment))
 
-        self._checkout_system_container(repo, name, image, next_deployment, True, values, remote=self.args.remote)
+        self._checkout(repo, name, image, next_deployment, True, values, remote=self.args.remote)
 
     def get_container_runtime_info(self, container):
-        if self.user:
-            return {'status' : "running" if self._is_service_active(container) else "exited"}
 
-        try:
-            inspect_stdout = util.check_output([util.RUNC_PATH, "state", container], stderr=DEVNULL)
-            ret = json.loads(inspect_stdout.decode())
-            status = ret["status"]
-            created = dateparse(ret['created'])
-            return {"status" : status, "created" : created}
-        except (subprocess.CalledProcessError):
-            return {}
+        if self._is_service_active(container):
+            return {'status' : "running"}
+        elif self._is_service_failed(container):
+            return {'status' : "failed"}
+        else:
+            # The container is newly created or stopped, and can be started with 'systemctl start'
+            return {'status' : "inactive"}
 
-    def get_system_containers(self):
+    def get_containers(self):
         checkouts = self._get_system_checkout_path()
         if not os.path.exists(checkouts):
             return []
@@ -590,9 +624,8 @@ class SystemContainers(object):
         repo = self._get_ostree_repo()
         if not repo:
             return
-        imagebranch = SystemContainers._get_ostree_image_branch(image)
-        commit_rev = repo.resolve_rev(imagebranch, True)
-        if not commit_rev[1]:
+        imagebranch, commit_rev = self._resolve_image(repo, image)
+        if not commit_rev:
             return
         ref = OSTree.parse_refspec(imagebranch)
         repo.set_ref_immediate(ref[1], ref[2], None)
@@ -601,15 +634,19 @@ class SystemContainers(object):
         repo = self._get_ostree_repo()
         if not repo:
             return None
-        imagebranch = SystemContainers._get_ostree_image_branch(image)
-        return self._inspect_system_branch(repo, imagebranch)
+        return self._inspect_system_branch(repo, image)
 
     def _inspect_system_branch(self, repo, imagebranch):
-        commit_rev = repo.resolve_rev(imagebranch, False)[1]
+        if imagebranch.startswith(OSTREE_OCIIMAGE_PREFIX):
+            commit_rev = repo.resolve_rev(imagebranch, False)[1]
+        else:
+            _, commit_rev = self._resolve_image(repo, imagebranch)
+            if commit_rev is None:
+                raise ValueError("Image %s not found" % imagebranch)
         commit = repo.load_commit(commit_rev)[1]
 
-        branch_id = imagebranch.replace(OSTREE_OCIIMAGE_PREFIX, "")
-        tag = ":".join(branch_id.rsplit('-', 1))
+        branch_id = SystemContainers._decode_from_ostree_ref(imagebranch.replace(OSTREE_OCIIMAGE_PREFIX, ""))
+        tag = ":".join(branch_id.rsplit(':', 1))
         timestamp = OSTree.commit_get_timestamp(commit)
         labels = {}
 
@@ -652,6 +689,41 @@ class SystemContainers(object):
         except subprocess.CalledProcessError:
             return False
 
+    def _is_service_failed(self, name):
+        try:
+            is_failed = self._systemctl_command("is-failed", name, quiet=True).replace("\n", "")
+        except subprocess.CalledProcessError as e:
+            is_failed = e.output
+            if is_failed.replace("\n", "") != "inactive":
+                return True
+
+        if is_failed == "failed":
+            return True
+        elif is_failed == "active":
+            return False
+        else:
+            # in case of "inactive", could be a stopped container or failed process
+            try:
+                status = self._systemctl_command("status", name, quiet=True)
+            except subprocess.CalledProcessError as e:
+                status = e.output
+            if 'FAILURE' in status:
+                return True
+            else:
+                return False
+
+    def start_service(self, name):
+        try:
+            self._systemctl_command("start", name)
+        except subprocess.CalledProcessError as e:
+            raise ValueError(e.output)
+
+    def stop_service(self, name):
+        try:
+            self._systemctl_command("stop", name)
+        except subprocess.CalledProcessError as e:
+            raise ValueError(e.output)
+
     def _systemd_tmpfiles(self, command, name):
         cmd = ["systemd-tmpfiles"] + [command, name]
         util.write_out(" ".join(cmd))
@@ -671,14 +743,16 @@ class SystemContainers(object):
             return util.check_output(cmd, stderr=DEVNULL)
         return None
 
-    def get_system_container_checkout(self, name):
+    def get_checkout(self, name):
+        if len(name) == 0:
+            raise ValueError("Invalid container name")
         path = "%s/%s" % (self._get_system_checkout_path(), name)
         if os.path.exists(path):
             return path
         else:
             return None
 
-    def uninstall_system_container(self, name):
+    def uninstall(self, name):
         unitfileout, tmpfilesout = self._get_systemd_destination_files(name)
 
         try:
@@ -718,7 +792,15 @@ class SystemContainers(object):
                 if len(i) == len(OSTREE_OCIIMAGE_PREFIX) + 64:
                     refs[i] = False
                 else:
-                    app_refs.append(i)
+                    invalid_encoding = False
+                    for c in i.replace(OSTREE_OCIIMAGE_PREFIX, ""):
+                        if not str.isalnum(str(c)) and c not in '.-_':
+                            invalid_encoding = True
+                            break
+                    if invalid_encoding:
+                        refs[i] = False
+                    else:
+                        app_refs.append(i)
 
         def visit(rev):
             manifest = self._image_manifest(repo, repo.resolve_rev(rev, True)[1])
@@ -824,9 +906,33 @@ class SystemContainers(object):
                 return OSTree.RepoCommitFilterResult.ALLOW
 
             modifier = OSTree.RepoCommitModifier.new(0, filter_func, None)
-            repo.write_archive_to_mtree(Gio.File.new_for_path(tar), mtree, modifier, True)
-            root = repo.write_mtree(mtree)[1]
+
             metav = GLib.Variant("a{sv}", {'docker.layer': GLib.Variant('s', layer)})
+
+            imported = False
+            try:
+                repo.write_archive_to_mtree(Gio.File.new_for_path(tar), mtree, modifier, True)
+                root = repo.write_mtree(mtree)[1]
+                csum = repo.write_commit(None, "", None, metav, root)[1]
+                imported = True
+            except GLib.GError as e:  #pylint: disable=catching-non-exception
+                # libarchive which is used internally by OSTree to import a tarball doesn't support correctly
+                # files with xattrs.  If that happens, extract the tarball and import the directory.
+                if e.domain != "g-io-error-quark":  # pylint: disable=no-member
+                    raise e  #pylint: disable=raising-non-exception
+
+            if not imported:
+                try:
+                    temp_dir = tempfile.mkdtemp()
+                    with tarfile.open(tar, 'r') as t:
+                        t.extractall(temp_dir)
+                    repo.write_directory_to_mtree(Gio.File.new_for_path(temp_dir), mtree, modifier)
+                    root = repo.write_mtree(mtree)[1]
+                    csum = repo.write_commit(None, "", None, metav, root)[1]
+                finally:
+                    shutil.rmtree(temp_dir)
+
+            root = repo.write_mtree(mtree)[1]
             csum = repo.write_commit(None, "", None, metav, root)[1]
             repo.transaction_set_ref(None, "%s%s" % (OSTREE_OCIIMAGE_PREFIX, layer), csum)
 
@@ -867,17 +973,22 @@ class SystemContainers(object):
                     with open(manifest_file, 'r') as mfile:
                         manifest = mfile.read()
                     for m in json.loads(manifest):
-                        _, image, tag = SystemContainers._parse_imagename(m["RepoTags"][0])
-                        imagebranch = "%s%s-%s" % (OSTREE_OCIIMAGE_PREFIX, image.replace("sha256:", ""), tag)
+                        if "Config" in m:
+                            config_file = os.path.join(temp_dir, m["Config"])
+                            with open(config_file, 'r') as config:
+                                config = json.loads(config.read())
+                                labels = config['config']['Labels']
+                        imagename = m["RepoTags"][0]
+                        imagebranch = "%s%s" % (OSTREE_OCIIMAGE_PREFIX, SystemContainers._encode_to_ostree_ref(imagename))
                         input_layers = m["Layers"]
-                        self._pull_dockertar_layers(repo, imagebranch, temp_dir, input_layers)
+                        self._pull_dockertar_layers(repo, imagebranch, temp_dir, input_layers, labels=labels)
                 else:
                     repositories = ""
                     repositories_file = os.path.join(temp_dir, "repositories")
                     with open(repositories_file, 'r') as rfile:
                         repositories = rfile.read()
-                    _, image, tag = SystemContainers._parse_imagename(list(json.loads(repositories).keys())[0])
-                    imagebranch = "%s%s-%s" % (OSTREE_OCIIMAGE_PREFIX, image, tag)
+                    imagename = list(json.loads(repositories).keys())[0]
+                    imagebranch = "%s%s" % (OSTREE_OCIIMAGE_PREFIX, SystemContainers._encode_to_ostree_ref(imagename))
                     input_layers = []
                     for name in os.listdir(temp_dir):
                         if name == "repositories":
@@ -896,8 +1007,7 @@ class SystemContainers(object):
         return repo.pull(remote, [branch], 0, None)
 
     def _check_system_oci_image(self, repo, img, upgrade):
-        _, image, tag = SystemContainers._parse_imagename(img.replace("oci:", ""))
-        imagebranch = "%s%s-%s" % (OSTREE_OCIIMAGE_PREFIX, image.replace("sha256:", ""), tag)
+        imagebranch = "%s%s" % (OSTREE_OCIIMAGE_PREFIX, SystemContainers._encode_to_ostree_ref(img))
         current_rev = repo.resolve_rev(imagebranch, True)
         if not upgrade and current_rev[1]:
             return False
@@ -950,35 +1060,60 @@ class SystemContainers(object):
             return None
         return metadata[key]
 
-    def extract_system_container(self, img, destination):
+    def extract(self, img, destination):
         repo = self._get_ostree_repo()
         if not repo:
             return False
-        return self._checkout_system_container(repo, img, img, 0, False, destination=destination, extract_only=True)
+        return self._checkout(repo, img, img, 0, False, destination=destination, extract_only=True)
+
+    @staticmethod
+    def _encode_to_ostree_ref(name):
+        def convert(x):
+            return (x if str.isalnum(str(x)) or x in '.-' else "_%02X" % ord(x))
+
+        if name.startswith("oci:"):
+            name = name[len("oci:"):]
+        registry, image, tag = SystemContainers._parse_imagename(name)
+        if registry:
+            fullname = "%s/%s:%s" % (registry, image, tag)
+        else:
+            fullname = "%s:%s" % (image, tag)
+
+        ret = "".join([convert(i) for i in fullname])
+        return ret
+
+    @staticmethod
+    def _decode_from_ostree_ref(name):
+        try:
+            l = []
+            i = 0
+            while i < len(name):
+                if name[i] == '_':
+                    l.append(str(chr(int(name[i+1:i+3], 16))))
+                    i = i + 3
+                else:
+                    l.append(name[i])
+                    i = i + 1
+            return "".join(l)
+        except ValueError:
+            return name
 
     @staticmethod
     def _get_ostree_image_branch(img):
         if "ostree:" in img:
             imagebranch = img.replace("ostree:", "")
         else: # assume "oci:" image
-            _, image, tag = SystemContainers._parse_imagename(img.replace("oci:", "").replace("docker:", ""))
-            imagebranch = "%s%s-%s" % (OSTREE_OCIIMAGE_PREFIX, image.replace("sha256:", ""), tag)
+            imagebranch = "%s%s" % (OSTREE_OCIIMAGE_PREFIX, SystemContainers._encode_to_ostree_ref(img.replace("sha256:", "")))
         return imagebranch
 
-    def has_system_container_image(self, img):
+    def has_image(self, img):
         repo = self._get_ostree_repo()
         if not repo:
             return False
-        try:
-            imagebranch = SystemContainers._get_ostree_image_branch(img)
-            return repo.resolve_rev(imagebranch, False)[0]
-        except: #pylint: disable=bare-except
-            for i in self.get_system_images(get_all=True):
-                if i['Id'].startswith(img):
-                    return True
-            return False
+        _, rev = self._resolve_image(repo, img)
+        return True if rev else False
 
-    def _pull_dockertar_layers(self, repo, imagebranch, temp_dir, input_layers):
+    def _pull_dockertar_layers(self, repo, imagebranch, temp_dir, input_layers, labels=None):
         layers = {}
         next_layer = {}
         top_layer = None
@@ -1005,7 +1140,7 @@ class SystemContainers(object):
             layers_ordered.append(layers_map[it])
             it = next_layer.get(it)
 
-        manifest = json.dumps({"Layers" : layers_ordered})
+        manifest = json.dumps({"Layers" : layers_ordered, "Labels" : labels})
 
         layers_to_import = {}
         for k, v in layers.items():
