@@ -8,12 +8,13 @@ atomic-trust - Manage system container trust policy
 # SYNOPSIS
 **atomic trust add|delete|default|show**
 [**-h**|**--help**]
-
+[**-j**|**--json**]
 [**-k**|**--pubkeys** KEY1 [**-k**|**--pubkeys** KEY2,...]]
 [**--keytype** GPGKeys]
-[**-t**|**--type** signedBy|insecureAcceptAnything|reject]
+[**-r**|**--remove**]
 [**-s**|**--sigstore** https://URL[:PORT][/PATH]|file:///PATH]
 [**--sigstoretype** web|atomic|local]
+[**-t**|**--type** signedBy|insecureAcceptAnything|reject]
 REGISTRY[/REPOSITORY]
 
 # DESCRIPTION
@@ -44,6 +45,7 @@ environment variable **TRUST_POLICY**. This is typically only useful for
 testing.
 
 # OPTIONS
+
 **-h** **--help**
   Print usage statement.
 
@@ -57,9 +59,9 @@ testing.
 **-t** **--type**
   The trust type for this policy entry. Accepted values:
     **signedBy** (default): Require signatures with corresponding list of
-                            public keys
+			    public keys
     **insecureAcceptAnything**: do not require any signatures for this
-                                registry scope
+				registry scope
     **reject**: do not accept images for this registry scope
 
 **-u** **--sigstore**
@@ -73,22 +75,43 @@ testing.
     **local**: Local filesystem path
 
 
+
+# default OPTIONS
+
+  The default trust policy is managed by the default command. Options are **accept** or **reject**.
+
+# delete OPTIONS
+
+**-r** **--remove**
+  Remove registry information from the local sigstore
+
+**-s** **--sigstoretype**
+  Type of signature transport. Accepted values:
+    **web** (default): remote web server
+    **atomic**: OpenShift-based Atomic Registry API
+    **local**: Local filesystem path
+
+# show OPTIONS
+
+**-j** **--json**
+  Output policy file as raw json
+
 # EXAMPLES
 Add public key trust to specific registry repository
 
     atomic trust add \
-           --pubkeys /etc/pki/containers/foo@example.com \
-           --sigstore https://s3.bucket/foobar/sigstore/ \
-           docker.io/foobar
+	   --pubkeys /etc/pki/containers/foo@example.com \
+	   --sigstore https://s3.bucket/foobar/sigstore/ \
+	   docker.io/foobar
 
 Modify a trust scope, adding a second public key and changing
 the sigstore web server
 
     atomic trust add \
-           --pubkeys /etc/pki/containers/foo@example.com \
-           --pubkeys /etc/pki/containers/bar@example.com \
-           --sigstore https://server.example.com/foobar/sigstore/ \
-           docker.io/foobar
+	   --pubkeys /etc/pki/containers/foo@example.com \
+	   --pubkeys /etc/pki/containers/bar@example.com \
+	   --sigstore https://server.example.com/foobar/sigstore/ \
+	   docker.io/foobar
 
 Accept all unsigned images from a registry
 

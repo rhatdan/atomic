@@ -58,11 +58,13 @@ def cli(subparser):
     defaultp.set_defaults(_class=Trust, func="modify_default")
     deletep = subparsers.add_parser("delete",
                                     help="Delete a trust policy for a registry")
-    deletep.add_argument("registry",
-                         help=registry_help)
+    deletep.add_argument("-r", "--remove", default=False, action="store_true",
+                         help="Remove registry information from the local sigstore")
     deletep.add_argument("--sigstoretype", dest="sigstoretype", default="web",
                          choices=['atomic', 'local', 'web'],
                          help=sigstore_help)
+    deletep.add_argument("registry",
+                         help=registry_help)
     deletep.set_defaults(_class=Trust, func="delete")
     showp = subparsers.add_parser("show",
                                   help="Display trust policy for the system")
@@ -143,6 +145,8 @@ class Trust(Atomic):
         with open(self.policy_filename, 'r+') as policy_file:
             policy = json.load(policy_file)
             try:
+                if self.args.remove:
+                    sigstore = policy["transports"][sstype][self.args.registry]["sigstore"]
                 del policy["transports"][sstype][self.args.registry]
             except KeyError:
                 raise ValueError("Could not find trust policy defined for %s transport %s" %
