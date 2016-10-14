@@ -335,15 +335,17 @@ class SystemContainers(object):
         elif remote_path:
             rootfs = os.path.join(remote_path, "rootfs")
         else:
-            # Under Atomic, get the real deployment location.  It is needed to create the hard links.
-            try:
-                sysroot = OSTree.Sysroot()
-                sysroot.load()
-                osname = sysroot.get_booted_deployment().get_osname()
-                destination = os.path.join("/ostree/deploy/", osname, os.path.relpath(destination, "/"))
-                destination = os.path.realpath(destination)
-            except: #pylint: disable=bare-except
-                pass
+            # Under Atomic, get the real deployment location if we're using the
+            # system repo. It is needed to create the hard links.
+            if self.get_ostree_repo_location() == '/ostree/repo':
+                try:
+                    sysroot = OSTree.Sysroot()
+                    sysroot.load()
+                    osname = sysroot.get_booted_deployment().get_osname()
+                    destination = os.path.join("/ostree/deploy/", osname, os.path.relpath(destination, "/"))
+                    destination = os.path.realpath(destination)
+                except: #pylint: disable=bare-except
+                    pass
             rootfs = os.path.join(destination, "rootfs")
 
         if os.path.exists(destination):
@@ -608,7 +610,7 @@ class SystemContainers(object):
             with open(os.path.join(fullpath, "info"), "r") as info_file:
                 info = json.load(info_file)
                 revision = info["revision"] if "revision" in info else ""
-                created = info["created"] if "created" in info else ""
+                created = info["created"] if "created" in info else 0
                 image = info["image"] if "image" in info else ""
 
             with open(os.path.join(fullpath, "config.json"), "r") as config_file:
@@ -693,7 +695,7 @@ class SystemContainers(object):
         try:
             is_failed = self._systemctl_command("is-failed", name, quiet=True).replace("\n", "")
         except subprocess.CalledProcessError as e:
-            is_failed = e.output
+            is_failed = e.output.decode('utf-8')
             if is_failed.replace("\n", "") != "inactive":
                 return True
 
@@ -706,7 +708,7 @@ class SystemContainers(object):
             try:
                 status = self._systemctl_command("status", name, quiet=True)
             except subprocess.CalledProcessError as e:
-                status = e.output
+                status = e.output.decode('utf-8')
             if 'FAILURE' in status:
                 return True
             else:
@@ -740,7 +742,7 @@ class SystemContainers(object):
         if not quiet:
             util.write_out(" ".join(cmd))
         if not self.display:
-            return util.check_output(cmd, stderr=DEVNULL)
+            return util.check_output(cmd, stderr=DEVNULL).decode('utf-8')
         return None
 
     def get_checkout(self, name):
