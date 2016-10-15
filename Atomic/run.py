@@ -24,6 +24,19 @@ SPC_ARGS = ["run",
             "--name", "${NAME}",
             "${IMAGE}"]
 
+LOCKDOWN_ARGS = ["run",
+            "-t",
+            "-i",
+            "--rm",
+            "--cap-drop", "ALL",
+            "--cap-add", "SETUID",
+            "--cap-add", "SETGID",
+            "--cap-add", "NET_BIND_SERVICE",
+            "-e", "NAME=${NAME}",
+            "-e", "IMAGE=${IMAGE}",
+            "--name", "${NAME}",
+            "${IMAGE}"]
+
 RUN_ARGS = ["run",
             "-t",
             "-i",
@@ -39,26 +52,26 @@ def cli(subparser):
         "name is specified.  Defaults to the following command, if image does "
         "not specify LABEL run:\n'%s'" % Run.print_run())
     runp.set_defaults(_class=Run, func='run')
-    run_group = runp.add_mutually_exclusive_group()
     util.add_opt(runp)
     runp.add_argument("-n", "--name", dest="name", default=None,
                       help=_("name of container"))
-    runp.add_argument("--spc", default=False, action="store_true",
-                      help=_("use super privileged container mode: '%s'" %
-                             Run.print_spc()))
+    priv_group = runp.add_mutually_exclusive_group()
+    priv_group.add_argument("--spc", default=False, action="store_true",
+                            help=_("use super privileged container mode: '%s'" %
+                                   Run.print_spc()))
+    priv_group.add_argument("--lockdown", default=False, action="store_true",
+                            help=_("Run containes with locked down capabailities: '%s'" %
+                                   Run.print_lockdown()))
     runp.add_argument("image", help=_("container image"))
     runp.add_argument("command", nargs="*",
                       help=_("optional command to execute within the container. "
                              "If container is not running, command is appended "
                              "to the image run method"))
 
+    run_group = runp.add_mutually_exclusive_group()
     run_group.add_argument("--quiet", "-q", action="store_true",
                       help=_("Be less verbose."))
-
-    run_group.add_argument(
-        "--display",
-        default=False,
-        action="store_true",
+    run_group.add_argument("--display", default=False, action="store_true",
         help=_("preview the command that %s would execute") % sys.argv[0])
 
 
@@ -94,6 +107,12 @@ class Run(Atomic):
                 args = [self.docker_binary()] + SPC_ARGS + self.command
             else:
                 args = [self.docker_binary()] + SPC_ARGS + self._get_cmd()
+        elif self.args.lockdown:
+            self.args.quiet = True
+            if self.command:
+                args = [self.docker_binary()] + LOCKDOWN_ARGS + self.command
+            else:
+                args = [self.docker_binary()] + LOCKDOWN_ARGS + self._get_cmd()
         else:
             args = self._get_args("RUN")
             if args:
@@ -176,3 +195,7 @@ class Run(Atomic):
     @staticmethod
     def print_spc():
         return "%s %s" % (util.default_docker(), " ".join(SPC_ARGS))
+
+    @staticmethod
+    def print_lockdown():
+        return "%s %s" % (util.default_docker(), " ".join(LOCKDOWN_ARGS))
