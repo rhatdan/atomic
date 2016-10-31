@@ -28,6 +28,9 @@ def cli(subparser):
     signp.add_argument("--sign-by", dest="sign_by", default=signer,
                        help=_("Name of the signing key. Currently %s, "
                               "default can be defined in /etc/atomic.conf" % signer))
+    signp.add_argument("--passphrase",
+                       help=_("Passphrase to unlock the signing key. This is dangerous to pass in as an option")
+
     signp.add_argument("-d", "--directory",
                        default=None,
                        dest="signature_path",

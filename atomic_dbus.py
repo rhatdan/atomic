@@ -385,14 +385,15 @@ class atomic_dbus(slip.dbus.service.Object):
     # atomic sign section
     # The create a signature for images which can be used later to verify them.
     @slip.dbus.polkit.require_auth("org.atomic.read")
-    @dbus.service.method("org.atomic", in_signature='assss', out_signature='')
-    def Sign(self, images, sign_by, signature_path, gnupghome):
+    @dbus.service.method("org.atomic", in_signature='asssss', out_signature='')
+    def Sign(self, images, sign_by, passphrase, signature_path, gnupghome):
         sign = Sign()
         args = self.Args()
         args.images = images
         args.sign_by = sign_by
         args.signature_path = signature_path
         args.gnupghome = gnupghome
+        args.passphrase = passphrase
         sign.set_args(args)
         return sign.sign()
 

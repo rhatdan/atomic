@@ -143,10 +143,10 @@ class AtomicDBus (object):
         return ret
 
     @polkit.enable_proxy
-    def Sign(self, images, sign_by, signature_path = "", gnupghome=""):
+    def Sign(self, images, sign_by, passphrase="", signature_path = "", gnupghome=""):
         if not isinstance(images, (list, tuple)):
             images = [ images ]
-        return self.dbus_object.Sign(images, sign_by, signature_path, gnupghome, dbus_interface="org.atomic")
+        return self.dbus_object.Sign(images, sign_by,  passphrase, signature_path, gnupghome, dbus_interface="org.atomic")
 
     @polkit.enable_proxy
     def Top(self, containers=None, options=""):
