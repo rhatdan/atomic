@@ -4,9 +4,11 @@ import argparse
 try:
     from . import Atomic
 except ImportError:
-    from atomic import Atomic # pylint: disable=relative-import
+    from atomic import Atomic  # pylint: disable=relative-import
 
 from .atomic import AtomicError
+from docker.errors import NotFound
+import requests.exceptions
 
 def cli(subparser, hidden=False):
     # atomic info
@@ -23,7 +25,12 @@ def cli(subparser, hidden=False):
     infop.add_argument("--remote", dest="force",
                        action='store_true', default=False,
                        help=_('ignore local images and only scan registries'))
+    infop.add_argument("--storage", default="", dest="storage",
+                       help=_("Specify the storage of the image. "
+                              "If not specified and there are images with the same name in "
+                              "different storages, you will be prompted to specify."))
     infop.add_argument("image", help=_("container image"))
+
 
 def cli_version(subparser, hidden=False):
     if hidden:
@@ -37,7 +44,11 @@ def cli_version(subparser, hidden=False):
     versionp.add_argument("-r", "--recurse", default=False, dest="recurse",
                           action="store_true",
                           help=_("recurse through all layers"))
-    versionp.set_defaults(_class=Info, func='version')
+    versionp.add_argument("--storage", default="", dest="storage",
+                          help=_("Specify the storage of the image. "
+                                 "If not specified and there are images with the same name in "
+                                 "different storages, you will be prompted to specify."))
+    versionp.set_defaults(_class=Info, func='print_version')
     versionp.add_argument("image", help=_("container image"))
 
 
@@ -46,8 +57,45 @@ class Info(Atomic):
         super(Info, self).__init__()
 
     def version(self):
-        self.args.force = False
-        self.info_tty()
+        if not self.args.storage:
+            if self.is_duplicate_image(self.image):
+                raise ValueError("Found more than one Image with name {}; "
+                                 "please specify with --storage.".format(self.image))
+            else:
+                if self.syscontainers.has_image(self.image):
+                    return self.syscontainers.version(self.image)
+                try:
+                    self.d.inspect_image(self.image)
+                except (NotFound, requests.exceptions.ConnectionError):
+                    self._no_such_image()
+
+        elif self.args.storage.lower() == "ostree":
+            if self.syscontainers.has_image(self.image):
+                return self.syscontainers.version(self.image)
+            self._no_such_image()
+
+        elif self.args.storage.lower() == "docker":
+            try:
+                self.d.inspect_image(self.image)
+            except (NotFound, requests.exceptions.ConnectionError):
+                self._no_such_image()
+
+        else:
+            raise ValueError("{} is not a valid storage".format(self.args.storage))
+
+        if self.args.recurse:
+            return self.get_layers()
+        else:
+            return [self._get_layer(self.image)]
+
+    def get_version(self):
+        versions = []
+        for layer in self.version():
+            version = "None"
+            if "Version" in layer and layer["Version"] != '':
+                version = layer["Version"]
+            versions.append({"Image": layer['RepoTags'], "Version": version, "iid": layer['Id']})
+        return versions
 
     def info_tty(self):
         util.write_out(self.info())
@@ -57,31 +105,63 @@ class Info(Atomic):
         Retrieve and print all LABEL information for a given image.
         """
         buf = ""
+
         def _no_label():
-            raise ValueError("'{}' has no label information."
-                             .format(self.args.image))
-        # Check if the input is an image id associated with more than one
-        # repotag.  If so, error out.
-        if self.syscontainers.has_image(self.image):
-            if not self.args.force:
-                buf += ("Image Name: {}".format(self.image))
-                manifest = self.syscontainers.inspect_system_image(self.image)
-                labels = manifest["Labels"]
-                for label in labels:
-                    buf += ('\n{0}: {1}'.format(label, labels[label]))
-                return buf
-        elif self.is_iid():
-            self.get_fq_name(self._inspect_image())
-        # The input is not an image id
+            return ""
+        if not self.args.storage:
+            if self.is_duplicate_image(self.image):
+                raise ValueError("Found more than one Image with name {}; "
+                                 "please specify with --storage.".format(self.image))
+
+            if self.syscontainers.has_image(self.image):
+                if not self.args.force:
+                    buf += ("Image Name: {}".format(self.image))
+                    manifest = self.syscontainers.inspect_system_image(self.image)
+                    labels = manifest["Labels"]
+                    for label in labels:
+                        buf += ('\n{0}: {1}'.format(label, labels[label]))
+                    return buf
+            # Check if the input is an image id associated with more than one
+            # repotag.  If so, error out.
+            else:
+                try:
+                    iid = self._is_image(self.image)
+                    self.image = self.get_fq_name(self._inspect_image(iid))
+                except AtomicError:
+                    if self.args.force:
+                        self.image = util.find_remote_image(self.d, self.image)
+                    if self.image is None:
+                        self._no_such_image()
+
+        elif self.args.storage.lower() == "ostree":
+            if self.syscontainers.has_image(self.image):
+                if not self.args.force:
+                    buf += ("Image Name: {}".format(self.image))
+                    manifest = self.syscontainers.inspect_system_image(self.image)
+                    labels = manifest["Labels"]
+                    for label in labels:
+                        buf += ('\n{0}: {1}'.format(label, labels[label]))
+                    return buf
+            else:
+                self._no_such_image()
+
+        elif self.args.storage.lower() == "docker":
+            if self.is_iid():
+                self.get_fq_name(self._inspect_image())
+            # The input is not an image id
+            else:
+                try:
+                    iid = self._is_image(self.image)
+                    self.image = self.get_fq_name(self._inspect_image(iid))
+                except AtomicError:
+                    if self.args.force:
+                        self.image = util.find_remote_image(self.d, self.image)
+                    if self.image is None:
+                        self._no_such_image()
+
         else:
-            try:
-                iid = self._is_image(self.image)
-                self.image = self.get_fq_name(self._inspect_image(iid))
-            except AtomicError:
-                if self.args.force:
-                    self.image = util.find_remote_image(self.d, self.image)
-                if self.image is None:
-                    self._no_such_image()
+            raise ValueError("{} is not a valid storage".format(self.args.storage))
+
         buf += ("Image Name: {}".format(self.image))
         inspection = None
         if not self.args.force:
@@ -90,7 +170,7 @@ class Info(Atomic):
         if inspection is None:
             # Shut up pylint in case we're on a machine with upstream
             # docker-py, which lacks the remote keyword arg.
-            #pylint: disable=unexpected-keyword-arg
+            # pylint: disable=unexpected-keyword-arg
             inspection = util.skopeo_inspect("docker://" + self.image)
             # image does not exist on any configured registry
         if 'Config' in inspection and 'Labels' in inspection['Config']:
@@ -108,8 +188,19 @@ class Info(Atomic):
         return buf
 
     def print_version(self):
-        for layer in self.version():
-            version = layer["Version"]
-            if layer["Version"] == '':
-                version = "None"
-            util.write_out("%s %s %s" % (layer["Id"], version, layer["Tag"]))
+        versions = self.get_version()
+        max_version_len = len(max([x['Version'] for x in versions], key=len)) + 2
+        max_version_len = max_version_len if max_version_len > 9 else 9
+        max_img_len = len(max([y for x in versions for y in x['Image']], key=len)) + 9
+        max_img_len = max_img_len if max_img_len > 12 else 12
+        col_out = "{0:" + str(max_img_len) + "} {1:" + str(max_version_len) + "} {2:10}"
+        util.write_out("")
+        util.write_out(col_out.format("IMAGE NAME", "VERSION", "IMAGE ID"))
+        for layer in versions:
+            for int_img_name in range(len(layer['Image'])):
+                version = layer['Version'] if int_img_name < 1 else ""
+                iid = layer['iid'][:12] if int_img_name < 1 else ""
+                space = "" if int_img_name < 1 else "  Tag: "
+                util.write_out(col_out.format(space + layer['Image'][int_img_name], version, iid))
+        util.write_out("")
+

@@ -87,17 +87,17 @@ class RegistryConnection():
         if 'signatures' in self.manifest_json:
             return self._get_digest_from_signature()
         else:
-            return hashlib.sha256(self.orig_manifest).hexdigest()
+            return hashlib.sha256(self.orig_manifest.encode('utf-8')).hexdigest()
 
     def _get_digest_from_signature(self):
         for i in self.manifest_json['signatures']:
             _protected = i['protected']
-            protected_js = json.loads(jose_base64_urldecode(_protected))
+            protected_js = json.loads(jose_base64_urldecode(_protected).decode('utf-8'))
             format_length = protected_js['formatLength']
-            format_tail = jose_base64_urldecode(protected_js['formatTail'])
+            format_tail = jose_base64_urldecode(protected_js['formatTail']).decode('utf-8')
             orig = [ord(x) for x in self.orig_manifest]
             formatted = orig[:format_length] + [ord(x) for x in format_tail]
-            return hashlib.sha256("".join([chr(x) for x in formatted])).hexdigest()
+            return hashlib.sha256("".join([chr(x) for x in formatted]).encode('utf-8')).hexdigest()
 
     @staticmethod
     def load_local_tokens():
@@ -366,7 +366,7 @@ class RegistryInspect():
         results = self.rc.get(url)
         if results.status_code == 200:
             self.rc.manifest_json = results.json()
-            self.rc.orig_manifest = results.content
+            self.rc.orig_manifest = results.content.decode('utf-8')
             return self.rc.manifest_json
         else:
             raise RegistryInspectError("Unable to obtain manifest for "
@@ -390,7 +390,7 @@ class RegistryInspect():
             self.rc.whatever_json = results.json()
             return self.rc.whatever_json
         else:
-            raise RegistryInspectError("Unable to obtain whatever for "
+            raise RegistryInspectError("Unable to obtain blob for "
                                        "{}/{}/{}:{}".format(self.registry, self.repo, self.image, self.tag))
 
     def get_tag_list(self):
@@ -402,5 +402,4 @@ class RegistryInspect():
         else:
             raise RegistryInspectError("Unable to obtain tag information for "
                                        "{}/{}/{}:{}".format(self.registry, self.repo, self.image, self.tag))
-
 

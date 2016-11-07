@@ -2,7 +2,6 @@ import os
 import sys
 import json
 import pipes
-import argparse
 from .client import AtomicDocker
 from .syscontainers import SystemContainers
 
@@ -17,7 +16,7 @@ from . import util
 import re
 from .util import NoDockerDaemon, DockerObjectNotFound
 from docker.errors import NotFound
-from .discovery import RegistryInspect
+from .discovery import RegistryInspect, RegistryInspectError
 
 def find_repo_tag(d, Id, image_name):
     def image_in_repotags(image_name, repotags):
@@ -292,16 +291,6 @@ class Atomic(object):
                 "update --force %(image)s\n\n removes all containers based on "
                 "an image." % {"name": self.name, "image": self.image})
 
-    def container_run_command(self):
-        command = "%s run " % sys.argv[0]
-        if self.spc:
-            command += "--spc "
-
-        if self.name != self.image:
-            command += "--name %s " % self.name
-        command += self.image
-        return command
-
     #def ps -> Atomic/ps.py
 
     #def run -> Atomic/run.py
@@ -371,8 +360,18 @@ class Atomic(object):
             if self.image in image_info['RepoTags']:
                 return self.image
 
+            possibles = []
+            for i in image_info['RepoTags']:
+                try:
+                    possibles.append(self.get_fq_image_name(i))
+                except RegistryInspectError:
+                    possibles.append(None)
+
+            if all(x==possibles[0] for x in possibles):
+                return possibles[0]
+
             raise ValueError("\n{} is tagged with multiple repositories. "
-                             "Please use a repository name instead.\n".format(self.image))
+                             "Try adding a tag to your input.\n".format(self.image))
 
         return image_info['RepoTags'][0]
 
@@ -416,7 +415,7 @@ class Atomic(object):
         else:
             parent = ""
         return({"Id": image['Id'], "Name": get_label("Name"),
-                "Version": version, "Tag": find_repo_tag(self.d, image['Id'], self.image),
+                "Version": version, "RepoTags": image['RepoTags'],
                 "Parent": parent})
 
     def get_layers(self):
@@ -427,51 +426,6 @@ class Atomic(object):
             layer = self._get_layer(layer["Parent"])
             layers.append(layer)
         return layers
-
-    def _get_all_image_ids(self):
-        iids = []
-        for image in self.get_images():
-            iids.append(image['Id'])
-        return iids
-
-    def _get_all_container_ids(self):
-        cids = []
-        for con in self.get_containers():
-            cids.append(con['Id'])
-        return cids
-
-    def _get_image_infos(self, image):
-        def get_label(label):
-            return self.get_label(label, image["Id"])
-
-        return {"Id": image['Id'], "Name": get_label("Name"),
-                "Version": ("%s-%s-%s" % (get_label("Name"),
-                                          get_label("Version"),
-                                          get_label("Release"))).strip(":"),
-                "Tag": image["RepoTags"][0]}
-
-    def get_image_infos(self):
-        if len(self._images) > 0:
-            return self._images
-
-        images = self.get_images()
-        for image in images:
-            self._images.append(self._get_image_infos(image))
-
-        return self._images
-
-    def version(self):
-        try:
-            self.inspect = self.d.inspect_image(self.image)
-        except NotFound:
-            self.update()
-            self.inspect = self.d.inspect_image(self.image)
-        except requests.exceptions.ConnectionError:
-            raise NoDockerDaemon()
-        if self.args.recurse:
-            return self.get_layers()
-        else:
-            return [self._get_layer(self.image)]
 
     def display(self, cmd):
         util.write_out(cmd)
@@ -584,6 +538,16 @@ class Atomic(object):
             return name_search[0]['Id']
         # No dice
         raise AtomicError
+
+    def is_duplicate_image(self, image):
+        try:
+            if self.syscontainers.has_image(image) and self.d.inspect_image(image):
+                return True
+
+            return False
+        except (NotFound, requests.exceptions.ConnectionError):
+            pass
+        return False
 
     def get_input_id(self, identifier):
         '''
@@ -723,8 +687,3 @@ class Atomic(object):
 class AtomicError(Exception):
     pass
 
-def SetFunc(function):
-    class customAction(argparse.Action):
-        def __call__(self, parser, namespace, values, option_string=None):
-            setattr(namespace, self.dest, function)
-    return customAction

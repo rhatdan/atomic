@@ -1,0 +1,41 @@
+branches:
+  - master
+  - auto
+  - try
+
+host:
+  distro: fedora/24/atomic
+
+context: fedora/24/atomic
+
+tests:
+  - ./.redhat-ci.sh
+
+artifacts:
+  - tests.log
+
+timeout: 30m
+
+---
+
+inherit: true
+
+host:
+  distro: centos/7/atomic/continuous
+
+context: centos/7/atomic
+
+---
+
+inherit: true
+
+host:
+  distro: fedora/24/cloud
+
+context: fedora/24/cloud
+
+# we install atomic to get the runtime reqs but of course,
+# its files will get overwritten by the containerized build
+packages:
+  - atomic
+  - python3-coverage

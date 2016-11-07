@@ -6,14 +6,13 @@ import threading
 import dbus.service
 import dbus.mainloop.glib
 import json
-from gi.repository import GLib # pylint: disable=no-name-in-module
+from gi.repository import GObject
 import slip.dbus.service
-from Atomic import Atomic
+import Atomic
 from Atomic.containers import Containers
 from Atomic.delete import Delete
 from Atomic.diff import Diff
 from Atomic.help import AtomicHelp
-from Atomic.host import Host
 from Atomic.info import Info
 from Atomic.install import Install
 from Atomic.images import Images
@@ -25,7 +24,7 @@ from Atomic.stop import Stop
 from Atomic.sign import Sign
 from Atomic.storage import Storage
 from Atomic.top import Top
-import Atomic.trust as Trust
+from Atomic.trust import Trust
 from Atomic.uninstall import Uninstall
 from Atomic.verify import Verify
 
@@ -34,76 +33,79 @@ class atomic_dbus(slip.dbus.service.Object):
 
     class Args():
         def __init__(self):
-            self.display = False
-            self.quiet = True
-            self.assumeyes = True
-            self.remote = False
-            self.reboot=False
-            self.force = False
-            self.image = None
-            self.system = False
-            self.spc = False
-            self.storage = None
-            self.reg_type = None
-            self.recurse = False
-            self.debug = False
-            self.devices = None
-            self.driver = None
-            self.graph = None
-            self.import_location = None
-            self.export_location = None
-            self.compares = []
-            self.command = []
-            self.json = True
-            self.no_files = False
-            self.name = None
-            self.user = None
-            self.names_only = False
-            self.rpms = False
-            self.verbose = False
-            self.setvalues = []
-            self.scan_targets = []
-            self.scanner = None
-            self.scan_type = None
-            self.list = False
-            self.rootfs = []
-            self.images = []
-            self.delete_targets = []
-            self.containers = []
             self.all = False
+            self.args = []
+            self.assumeyes = True
+            self.command = []
+            self.compares = []
             self.container = False
-            self.prune = False
-            self.heading = False
-            self.truncate = False
-            self.registry = None
-            self.pubkeys = []
-            self.keytype = None
-            self.trust_type = None
-            self.sigstoretype = None
-            self.sigstore = None
+            self.containers = []
+            self.debug = False
             self.default_policy = None
-            self.mountpoint = None
-            self.options = None
-            self.optional = None
-            self.os = None
-            self.revision = None
-            self.reboot=False
+            self.delete_targets = []
+            self.devices = None
+            self.diff = False
+            self.display = False
             self.downgrade=False
-            self.rebase=False
+            self.driver = None
+            self.export_location = None
+            self.force = False
+            self.gnupghome = None
+            self.graph = None
+            self.heading = False
+            self.hotfix = False
+            self.image = None
+            self.images = []
+            self.import_location = None
+            self.json = True
+            self.keytype = None
+            self.list = False
             self.live = False
+            self.mountpoint = None
+            self.name = None
+            self.names_only = False
+            self.no_files = False
+            self.optional = None
+            self.options = None
+            self.os = None
+            self.pretty = False
+            self.preview = False
+            self.prune = False
+            self.pubkeys = []
+            self.quiet = True
+            self.raw = False
+            self.rebase=False
+            self.reboot=False
+            self.reboot=False
+            self.recurse = False
+            self.refspec = None
+            self.reg_type = None
+            self.registry = None
+            self.remote = False
+            self.revision = None
+            self.rootfs = []
+            self.rpms = False
+            self.save = False
+            self.scan_targets = []
+            self.scan_type = None
+            self.scanner = None
+            self.setvalues = []
             self.shared = False
             self.sign_by = None
             self.signature_path = None
-            self.args = []
-            self.diff = False
-            self.hotfix = False
-            self.refspec = None
-            self.preview = False
-            self.gnupghome = None
+            self.sigstore = None
+            self.sigstoretype = None
+            self.spc = False
+            self.storage = None
+            self.system = False
+            self.truncate = False
+            self.trust_type = None
+            self.user = None
+            self.verbose = False
 
     def __init__(self, *p, **k):
         super(atomic_dbus, self).__init__(*p, **k)
-        self.atomic = Atomic()
+        self.atomic = Atomic.Atomic()
         self.tasks = []
         self.tasks_lock = threading.Lock()
         self.last_token = 0
@@ -144,116 +146,7 @@ class atomic_dbus(slip.dbus.service.Object):
         args.names_only = names_only
         args.rpms = rpms
         diff.set_args(args)
-        return diff.diff()
-
-    # atomic host section
-    # The HostRollback switch to alternate installed tree at next boot
-    @slip.dbus.polkit.require_auth("org.atomic.readwrite")
-    @dbus.service.method("org.atomic", in_signature='b', out_signature='')
-    def HostRollBack(self, reboot=False):
-        host=Host()
-        args=self.Args()
-        args.reboot=reboot
-        host.set_args(args)
-        return host.host_rollback()
-
-    # The HostStatus list information about all deployments
-    @slip.dbus.polkit.require_auth("org.atomic.read")
-    @dbus.service.method("org.atomic", in_signature='', out_signature='s')
-    def HostStatus(self):
-        host=Host()
-        args=self.Args()
-        args.json=True
-        host.set_args(args)
-        return host.host_status()
-
-    # The HostUpgrade upgrade to the latest Atomic tree if one is available
-    @slip.dbus.polkit.require_auth("org.atomic.readwrite")
-    @dbus.service.method("org.atomic", in_signature='bbs', out_signature='')
-    def HostUpgrade(self, reboot=False, downgrade=False, os=None):
-        host=Host()
-        args=self.Args()
-        args.reboot=reboot
-        args.downgrade=downgrade
-        args.os=os
-        host.set_args(args)
-        return host.host_upgrade()
-
-    # The HostUpgradeDiff checks for upgrades and print package diff only
-    @slip.dbus.polkit.require_auth("org.atomic.read")
-    @dbus.service.method("org.atomic", in_signature='s', out_signature='s')
-    def HostUpgradeDiff(self, os=None):
-        host=Host()
-        args=self.Args()
-        args.diff=True
-        args.os=os
-        host.set_args(args)
-        return host.host_upgrade()
-
-    # The HostRebase - download and deploy a new origin refspec
-    @slip.dbus.polkit.require_auth("org.atomic.readwrite")
-    @dbus.service.method("org.atomic", in_signature='sb', out_signature='')
-    def HostRebase(self, refspec, os=None):
-        host=Host()
-        args=self.Args()
-        args.refspec=refspec
-        args.os=os
-        host.set_args(args)
-        return host.host_rebase()
-
-    # The HostDeployPreview - download and deploy a new origin refspec
-    @slip.dbus.polkit.require_auth("org.atomic.readwrite")
-    @dbus.service.method("org.atomic", in_signature='sbs', out_signature='')
-    def HostDeploy(self, revision, reboot, os):
-        host=Host()
-        args=self.Args()
-        args.revision=revision
-        args.reboot=reboot
-        args.os=os
-        host.set_args(args)
-        return host.host_deploy()
-
-    # The HostDeployPreview - download and deploy a new origin refspec
-    @slip.dbus.polkit.require_auth("org.atomic.read")
-    @dbus.service.method("org.atomic", in_signature='ss', out_signature='s')
-    def HostDeployPreview(self, revision, os=None):
-        host=Host()
-        args=self.Args()
-        args.revision=revision
-        args.preview=True
-        args.os=os
-        host.set_args(args)
-        return host.host_deploy()
-
-    # The HostUnlock - Make the current deployment mutable (for development or a hotfix)
-    @slip.dbus.polkit.require_auth("org.atomic.readwrite")
-    @dbus.service.method("org.atomic", in_signature='b', out_signature='')
-    def HostUnlock(self, hotfix=False):
-        host=Host()
-        args=self.Args()
-        args.hotfix=hotfix
-        host.set_args(args)
-        return host.host_install()
-
-    # The HostInstall - Install a (layered) RPM package
-    @slip.dbus.polkit.require_auth("org.atomic.readwrite")
-    @dbus.service.method("org.atomic", in_signature='as', out_signature='')
-    def HostInstall(self, rpms):
-        host=Host()
-        args=self.Args()
-        args.args=rpms
-        host.set_args(args)
-        return host.host_install()
-
-    # The HostUninstall - Remove a layered RPM package
-    @slip.dbus.polkit.require_auth("org.atomic.readwrite")
-    @dbus.service.method("org.atomic", in_signature='as', out_signature='')
-    def HostUninstall(self, rpms):
-        host=Host()
-        args=self.Args()
-        args.args=rpms
-        host.set_args(args)
-        return host.host_uninstall()
+        return json.dumps(diff.diff())
 
     # atomic containers section
     # The ContainersList method will list all containers on the system.
@@ -273,7 +166,8 @@ class atomic_dbus(slip.dbus.service.Object):
     def ContainersDelete(self, containers, all_containers, force):
         c = Containers()
         args = self.Args()
-        args.containers = containers
+        args.container = containers[0]
+        args.containers = containers[1:]
         args.force = force
         args.all = all_containers
         c.set_args(args)
@@ -435,7 +329,7 @@ class atomic_dbus(slip.dbus.service.Object):
         scan_list = Scan()
         args = self.Args()
         scan_list.set_args(args)
-        return scan_list.get_scanners_list()
+        return json.dumps(scan_list.get_scanners_list())
 
     # The ScanSetup method will create the scan object.
     def _ScanSetup(self, scan_targets, scanner, scan_type, rootfs, _all, images, containers):
@@ -467,8 +361,7 @@ class atomic_dbus(slip.dbus.service.Object):
 
     # The ScheduleScan method will return a token.
     @slip.dbus.polkit.require_auth("org.atomic.read")
-    @dbus.service.method("org.atomic", in_signature='asssasbbb',
-                         out_signature= 'x')
+    @dbus.service.method("org.atomic", in_signature='asssasbbb', out_signature= 'x')
     def ScheduleScan(self, scan_targets, scanner, scan_type, rootfs, _all, images, containers):
         scan = self._ScanSetup(scan_targets, scanner, scan_type, rootfs, _all, images, containers)
         token = self.AllocateToken()
@@ -479,8 +372,7 @@ class atomic_dbus(slip.dbus.service.Object):
     # The GetScanResults method will determine whether or not the results for
     # the token are ready.
     @slip.dbus.polkit.require_auth("org.atomic.read")
-    @dbus.service.method("org.atomic", in_signature='x',
-                         out_signature= 's')
+    @dbus.service.method("org.atomic", in_signature='x', out_signature= 's')
     def GetScanResults(self, token):
         with self.results_lock:
             if token in self.results:
@@ -493,7 +385,7 @@ class atomic_dbus(slip.dbus.service.Object):
     # atomic sign section
     # The create a signature for images which can be used later to verify them.
     @slip.dbus.polkit.require_auth("org.atomic.read")
-    @dbus.service.method("org.atomic", in_signature='assss', out_signature='s')
+    @dbus.service.method("org.atomic", in_signature='assss', out_signature='')
     def Sign(self, images, sign_by, signature_path, gnupghome):
         sign = Sign()
         args = self.Args()
@@ -585,16 +477,16 @@ class atomic_dbus(slip.dbus.service.Object):
     @slip.dbus.polkit.require_auth("org.atomic.read")
     @dbus.service.method("org.atomic", in_signature='', out_signature='s')
     def TrustShow(self):
-        trust = Trust.Trust()
+        trust = Trust()
         args = self.Args()
         trust.set_args(args)
-        return json.dumps(trust.show())
+        return json.dumps(trust.show_json())
 
     # TrustAdd adds public key trust to specific registry repository
     @slip.dbus.polkit.require_auth("org.atomic.readwrite")
     @dbus.service.method("org.atomic", in_signature='ssassss', out_signature='')
     def TrustAdd(self, registry, trusttype, pubkeys, keytype, sigstore, sigstoretype):
-        trust = Trust.Trust()
+        trust = Trust()
         args = self.Args()
         args.registry = registry
         args.pubkeys = pubkeys
@@ -609,7 +501,7 @@ class atomic_dbus(slip.dbus.service.Object):
     @slip.dbus.polkit.require_auth("org.atomic.readwrite")
     @dbus.service.method("org.atomic", in_signature='ss', out_signature='')
     def TrustDelete(self, registry, sigstoretype):
-        trust = Trust.Trust()
+        trust = Trust()
         args = self.Args()
         args.sigstoretype = sigstoretype
         args.registry = registry
@@ -620,7 +512,7 @@ class atomic_dbus(slip.dbus.service.Object):
     @slip.dbus.polkit.require_auth("org.atomic.readwrite")
     @dbus.service.method("org.atomic", in_signature='s', out_signature='')
     def TrustDefaultPolicy(self, default_policy):
-        trust = Trust.Trust()
+        trust = Trust()
         args = self.Args()
         args.default_policy = default_policy
         trust.set_args(args)
@@ -658,29 +550,25 @@ class atomic_dbus(slip.dbus.service.Object):
                                   "Verification": verify.verify()}) #pylint: disable=no-member
         return json.dumps(verifications)
 
-
     # atomic version section
     # The Version method takes in an image name and returns its version
-    # information
+    # information in a list of dicts
     @slip.dbus.polkit.require_auth("org.atomic.read")
-    @dbus.service.method("org.atomic", in_signature='asb',
-                         out_signature='aa{sv}')
-    def ImagesVersion(self, images, recurse=False):
-        versions = []
-        for image in images:
-            args = self.Args()
-            args.image = image
-            args.recurse = recurse
-            self.atomic.set_args(args)
-            versions.append({"Image": image,
-                             "Version": self.atomic.version()})
-        return versions
+    @dbus.service.method("org.atomic", in_signature='sb',
+                         out_signature='s')
+    def ImageVersion(self, image, recurse=False):
+        info = Info()
+        args = self.Args()
+        args.image = image
+        args.recurse = recurse
+        info.set_args(args)
+        return json.dumps(info.get_version())
 
 if __name__ == "__main__":
-    mainloop = GLib.MainLoop()
+    mainloop = GObject.MainLoop()
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     system_bus = dbus.SystemBus()
-    dbus.service.BusName("org.atomic", system_bus)
-    atomic_dbus(system_bus, "/org/atomic/object")
+    busname = dbus.service.BusName("org.atomic", system_bus)
+    atomic_object = atomic_dbus(system_bus, "/org/atomic/object")
     slip.dbus.service.set_mainloop(mainloop)
     mainloop.run()

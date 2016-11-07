@@ -134,11 +134,13 @@ class SystemContainers(object):
         if image.startswith("ostree:"):
             self._check_system_ostree_image(repo, image, upgrade)
         elif self.args.image.startswith("docker:"):
-            self._pull_docker_image(repo, image.replace("docker:", ""))
+            image = self._pull_docker_image(repo, image.replace("docker:", ""))
         elif self.args.image.startswith("dockertar:"):
-            self._pull_docker_tar(repo, image.replace("dockertar:", ""))
+            image = self._pull_docker_tar(repo, image.replace("dockertar:", ""))
         else: # Assume "oci:"
             self._check_system_oci_image(repo, image, upgrade)
+
+        return image
 
     def pull_image(self):
         self._pull_image_to_ostree(self._get_ostree_repo(), self.args.image, True)
@@ -169,7 +171,7 @@ class SystemContainers(object):
             except util.FileNotFound:
                 raise ValueError("Cannot install the container: runc is needed to run system containers")
 
-        self._pull_image_to_ostree(repo, image, False)
+        image = self._pull_image_to_ostree(repo, image, False)
 
         if self.get_checkout(name):
             util.write_out("%s already present" % (name))
@@ -335,15 +337,17 @@ class SystemContainers(object):
         elif remote_path:
             rootfs = os.path.join(remote_path, "rootfs")
         else:
-            # Under Atomic, get the real deployment location.  It is needed to create the hard links.
-            try:
-                sysroot = OSTree.Sysroot()
-                sysroot.load()
-                osname = sysroot.get_booted_deployment().get_osname()
-                destination = os.path.join("/ostree/deploy/", osname, os.path.relpath(destination, "/"))
-                destination = os.path.realpath(destination)
-            except: #pylint: disable=bare-except
-                pass
+            # Under Atomic, get the real deployment location if we're using the
+            # system repo. It is needed to create the hard links.
+            if self.get_ostree_repo_location() == '/ostree/repo':
+                try:
+                    sysroot = OSTree.Sysroot()
+                    sysroot.load()
+                    osname = sysroot.get_booted_deployment().get_osname()
+                    destination = os.path.join("/ostree/deploy/", osname, os.path.relpath(destination, "/"))
+                    destination = os.path.realpath(destination)
+                except: #pylint: disable=bare-except
+                    pass
             rootfs = os.path.join(destination, "rootfs")
 
         if os.path.exists(destination):
@@ -544,7 +548,7 @@ class SystemContainers(object):
     def version(self, image):
         image_inspect = self.inspect_system_image(image)
         if image_inspect:
-            return image_inspect['ImageId']
+            return [image_inspect]
         return None
 
     def update(self, name):
@@ -608,7 +612,7 @@ class SystemContainers(object):
             with open(os.path.join(fullpath, "info"), "r") as info_file:
                 info = json.load(info_file)
                 revision = info["revision"] if "revision" in info else ""
-                created = info["created"] if "created" in info else ""
+                created = info["created"] if "created" in info else 0
                 image = info["image"] if "image" in info else ""
 
             with open(os.path.join(fullpath, "config.json"), "r") as config_file:
@@ -670,8 +674,8 @@ class SystemContainers(object):
         else:
             image_type = "system"
 
-        return {'Id' : image_id, 'ImageId' : image_id, 'RepoTags' : [tag], 'Names' : [], 'Created': timestamp,
-                'ImageType' : image_type, 'Labels' : labels, 'OSTree-rev' : commit_rev}
+        return {'Id' : image_id, 'Version' : tag, 'ImageId' : image_id, 'RepoTags' : [tag], 'Names' : [],
+                'Created': timestamp, 'ImageType' : image_type, 'Labels' : labels, 'OSTree-rev' : commit_rev}
 
     def get_system_images(self, get_all=False, repo=None):
         if repo is None:
@@ -693,7 +697,7 @@ class SystemContainers(object):
         try:
             is_failed = self._systemctl_command("is-failed", name, quiet=True).replace("\n", "")
         except subprocess.CalledProcessError as e:
-            is_failed = e.output
+            is_failed = e.output.decode('utf-8')
             if is_failed.replace("\n", "") != "inactive":
                 return True
 
@@ -706,7 +710,7 @@ class SystemContainers(object):
             try:
                 status = self._systemctl_command("status", name, quiet=True)
             except subprocess.CalledProcessError as e:
-                status = e.output
+                status = e.output.decode('utf-8')
             if 'FAILURE' in status:
                 return True
             else:
@@ -740,7 +744,7 @@ class SystemContainers(object):
         if not quiet:
             util.write_out(" ".join(cmd))
         if not self.display:
-            return util.check_output(cmd, stderr=DEVNULL)
+            return util.check_output(cmd, stderr=DEVNULL).decode('utf-8')
         return None
 
     def get_checkout(self, name):
@@ -995,6 +999,7 @@ class SystemContainers(object):
                             continue
                         input_layers.append(name + "/layer.tar")
                     self._pull_dockertar_layers(repo, imagebranch, temp_dir, input_layers)
+            return imagename
         finally:
             shutil.rmtree(temp_dir)
 
@@ -1163,17 +1168,19 @@ class SystemContainers(object):
             return OSTree.checksum_from_bytes(checksum_v)
 
         def traverse(it):
+            def get_out_content_checksum(obj): return obj.out_content_checksum if hasattr(obj, 'out_content_checksum') else obj[1]
+            def get_out_checksum(obj): return obj.out_checksum if hasattr(obj, 'out_checksum') else obj[1]
             while True:
                 res = it.next()  # pylint: disable=next-method-called
                 if res == OSTree.RepoCommitIterResult.DIR:
-                    dir_checksum = it.get_dir().out_content_checksum
+                    dir_checksum = get_out_content_checksum(it.get_dir())
                     dir_it = OSTree.RepoCommitTraverseIter()
                     dirtree = repo.load_variant(OSTree.ObjectType.DIR_TREE, dir_checksum)
                     dir_it.init_dirtree(repo, dirtree[1], OSTree.RepoCommitTraverseFlags.REPO_COMMIT_TRAVERSE_FLAG_NONE)
                     traverse(dir_it)
                 elif res == OSTree.RepoCommitIterResult.FILE:
-                    new_checksum = validate_ostree_file(it.get_file().out_checksum)
-                    if new_checksum != it.get_file().out_checksum:
+                    new_checksum = validate_ostree_file(get_out_checksum(it.get_file()))
+                    if new_checksum != get_out_checksum(it.get_file()):
                         ret.append({"name" : it.get_file().out_name,
                                     "old-checksum" : it.get_file().out_checksum,
                                     "new-checksum" : new_checksum})

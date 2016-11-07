@@ -71,6 +71,10 @@ def cli(subparser):
     mountgroup.add_argument("--shared", dest="shared", action="store_true",
                             help=_("mount a container image 'shared'. Mounts the container image with  an SELinux label "
                                    "that other containers can read."))
+    mountgroup.add_argument("--storage", dest="storage", default="",
+                            help=_("Specify the storage of the image. "
+                                   "If not specified and there are images with the same name in "
+                                   "different storages, you will be prompted to specify."))
     mountp.add_argument("image", help=_("image/container id"))
     mountp.add_argument("mountpoint", help=_("filesystem location to mount "
                                              "the image/container"))
@@ -111,6 +115,7 @@ class Mount(Atomic):
         self.mountpoint = ""
         self.live = False
         self.shared = False
+        self.storage = ""
         self.options = ""
         self.user = util.is_user_mode()
 
@@ -125,7 +130,9 @@ class Mount(Atomic):
             self.live = args.live
         if hasattr(args, "shared"):
             self.shared = args.shared
-        if hasattr(args, "options"):
+        if hasattr(args, "storage"):
+            self.storage = args.storage
+        if getattr(args, "options", None):
             self.options = [opt for opt in args.options.split(',') if opt]
         if hasattr(args, "image"):
             self.image = args.image
@@ -134,25 +141,55 @@ class Mount(Atomic):
         return self.d.info()
 
     def mount(self):
-        try:
-            d = OSTreeMount(self.args, self.mountpoint, live=self.live, shared=self.shared)
-            if d.mount(self.image, self.options):
-                return
-        except GLib.Error: # pylint: disable=catching-non-exception
-            pass
-        try:
-            d = DockerMount(self.mountpoint, self.live)
-            d.shared = self.shared
-            d.mount(self.image, self.options)
+        if not self.storage:
+            if self.is_duplicate_image(self.image):
+                raise ValueError("Found more than one Image with name {}; "
+                                 "please specify with --storage.".format(self.image))
+            try:
+                d = OSTreeMount(self.args, self.mountpoint, live=self.live, shared=self.shared)
+                if d.mount(self.image, self.options):
+                    return
+            except GLib.Error: # pylint: disable=catching-non-exception
+                pass
+            try:
+                d = DockerMount(self.mountpoint, self.live)
+                d.shared = self.shared
+                d.mount(self.image, self.options)
 
-            # only need to bind-mount on the devicemapper driver
-            if self._info()['Driver'] == 'devicemapper':
-                Mount.mount_path(os.path.join(self.mountpoint, "rootfs"),
-                                 self.mountpoint,
-                                 bind=True)
+                # only need to bind-mount on the devicemapper driver
+                if self._info()['Driver'] == 'devicemapper':
+                    Mount.mount_path(os.path.join(self.mountpoint, "rootfs"),
+                                     self.mountpoint,
+                                     bind=True)
 
-        except (MountError, NoDockerDaemon) as dme:
-            raise ValueError(dme)
+            except (MountError, NoDockerDaemon) as dme:
+                raise ValueError(dme)
+
+        elif self.storage.lower() == "ostree":
+            try:
+                d = OSTreeMount(self.args, self.mountpoint, live=self.live, shared=self.shared)
+                if d.mount(self.image, self.options):
+                    return
+            except GLib.Error: # pylint: disable=catching-non-exception
+                self._no_such_image()
+
+        elif self.storage.lower() == "docker":
+            try:
+                d = DockerMount(self.mountpoint, self.live)
+                d.shared = self.shared
+                d.mount(self.image, self.options)
+
+                # only need to bind-mount on the devicemapper driver
+                if self._info()['Driver'] == 'devicemapper':
+                    Mount.mount_path(os.path.join(self.mountpoint, "rootfs"),
+                                     self.mountpoint,
+                                     bind=True)
+
+            except (MountError, NoDockerDaemon) as dme:
+                raise ValueError(dme)
+
+        else:
+            raise ValueError("{} is not a valid storage".format(self.storage))
 
     def unmount(self):
 
@@ -196,19 +233,6 @@ class Mount(Atomic):
         if r.return_code != 0:
             raise MountError('Could not remove thin device:\n%s' %
                              r.stderr.decode(sys.getdefaultencoding()).split("\n")[0])
-
-    @staticmethod
-    def _is_device_active(device):
-        """
-        Checks dmsetup to see if a device is already active
-        """
-        cmd = [DMSETUP_PATH, 'info', device]
-        dmsetup_info = util.subp(cmd)
-        for dm_line in dmsetup_info.stdout.split("\n"):
-            line = dm_line.split(':')
-            if ('State' in line[0].strip()) and ('ACTIVE' in line[1].strip()):
-                return True
-        return False
 
     @staticmethod
     def _get_fs(thin_pathname):
@@ -334,10 +358,6 @@ class DockerMount(Mount):
             return iid
         else:
             return self._create_temp_container(iid)
-
-    def _is_container_running(self, cid):
-        cinfo = self.d.inspect_container(cid)
-        return cinfo['State']['Running']
 
     def _identifier_as_cid(self, identifier):
         """
@@ -685,15 +705,6 @@ class DockerMount(Mount):
         Mount.unmount_path(mountpoint)
         self._cleanup_container(self.d.inspect_container(cid))
 
-    def _clean_temp_container_by_path(self, path):
-        short_cid = os.path.basename(path)
-        if not self.live:
-            self.d.remove_container(short_cid)
-        self._clean_tmp_image()
-
-    def get_driver(self):
-        return self._info()['Driver']
-
 def getxattrfuncs():
     # Python 3 has support for extended attributes in the os module, while
     # Python 2 needs the xattr library.  Detect if any is available.
@@ -746,9 +757,6 @@ class OSTreeMount(Mount):
 
     def has_image(self, image_id):
         return self.syscontainers.has_image(image_id)
-
-    def has_identifier(self, _id):
-        return self.has_container(_id) or self.has_image(_id)
 
     def mount(self, identifier, options=None): # pylint: disable=arguments-differ
         if not options:

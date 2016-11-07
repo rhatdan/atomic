@@ -92,6 +92,8 @@ def image_by_name(img_name, images=None):
     for i in images:
         if not i["RepoTags"]:
             continue
+        if img_name in i['RepoTags']:
+            return [i]
         for t in i['RepoTags']:
             reg, rep, d_image, tag, _ = Decompose(t).all
             if matches(reg, i_reg) \
@@ -221,21 +223,6 @@ def get_mounts_by_path():
     return mount_info
 
 
-def is_dock_obj_mounted(docker_obj):
-    '''
-    Check if the provided docker object, which needs to be an ID,
-    is currently mounted and should be considered "busy"
-    :param docker_obj: str, must be in ID format
-    :return: bool True or False
-    '''
-    mount_info = get_mounts_by_path()
-    devices = [x['device'] for x in mount_info]
-    # If we can find the ID of the object in the list
-    # of devices which comes from mount, safe to assume
-    # it is busy.
-    return any(docker_obj in x for x in devices)
-
-
 def urllib3_disable_warnings():
     # On latest Fedora, this is a symlink
     if hasattr(requests, 'packages'):
@@ -338,6 +325,8 @@ def skopeo_standalone_sign(image, manifest_file_name, fingerprint, signature_pat
         cmd = cmd + ['--debug']
     cmd = cmd + ['standalone-sign', manifest_file_name, image,
                  fingerprint, "-o", signature_path]
+    if debug:
+        write_out("Executing: {}".format(" ".join(cmd)))
     return check_call(cmd)
 
 def skopeo_manifest_digest(manifest_file, debug=False):
@@ -606,11 +595,15 @@ def expandvars(path, environ=None):
     return path
 
 def get_registry_configs(yaml_dir):
-    # Returns a dictionary of registries and a str of the default_store if applicable
+    """
+    Get concatenated registries.d sigstore configuration as a single dict of all files
+    :param yaml_dir: sigstore directory, e.g. /etc/containers/registries.d
+    :return: tuple (a dictionary of sigstores, str or None of the default_store)
+    """
     regs = {}
     default_store = None
     if not os.path.exists(yaml_dir):
-        return None, default_store
+        return regs, default_store
     # Get list of files that end in .yaml and are in fact files
     for yaml_file in [os.path.join(yaml_dir, x) for x in os.listdir(yaml_dir) if x.endswith('.yaml')
             and os.path.isfile(os.path.join(yaml_dir, x))]:
@@ -769,7 +762,7 @@ class Decompose(object):
     def _decompose(self, input_name):
         def is_network_address(_input):
             try:
-                socket.gethostbyname(_input)  # Remember to add in strip port here!
+                socket.gethostbyname(strip_port(_input))
             except socket.gaierror:
                 return False
             return True

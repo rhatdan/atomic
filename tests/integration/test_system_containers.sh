@@ -206,7 +206,12 @@ test -e ${WORK_DIR}/mount/usr/bin/greet.sh
 ${ATOMIC} umount ${WORK_DIR}/mount
 
 # mount an image
-${ATOMIC} mount atomic-test-system ${WORK_DIR}/mount
+# Since we have atomic-test-system in both ostree and docker, test that user must specify
+OUTPUT=$(! ${ATOMIC} mount atomic-test-system ${WORK_DIR}/mount 2>&1)
+grep "Found more than one Image with name atomic-test-system" <<< $OUTPUT
+
+# Now specify a storage
+${ATOMIC} mount atomic-test-system --storage ostree ${WORK_DIR}/mount
 test -e ${WORK_DIR}/mount/usr/bin/greet.sh
 ${ATOMIC} umount ${WORK_DIR}/mount
 
@@ -225,12 +230,13 @@ test \! -e ${ATOMIC_OSTREE_CHECKOUT_PATH}/${NAME}
 test \! -e ${ATOMIC_OSTREE_CHECKOUT_PATH}/${NAME}.0
 test \! -e ${ATOMIC_OSTREE_CHECKOUT_PATH}/${NAME}.1
 
-
 ${ATOMIC} pull --storage ostree docker:atomic-test-secret
-${ATOMIC} version atomic-test-secret > version.out
+# Move directly the OSTree reference to a new one, so that we have different names and info doesn't error out
+mv ${ATOMIC_OSTREE_REPO}/refs/heads/ociimage/atomic-test-secret_3Alatest ${ATOMIC_OSTREE_REPO}/refs/heads/ociimage/atomic-test-secret-ostree_3Alatest
+${ATOMIC} info atomic-test-secret-ostree > version.out
 assert_matches ${SECRET} version.out
-${ATOMIC} --assumeyes images delete -f atomic-test-secret
-
+${ATOMIC} --assumeyes images delete -f atomic-test-secret-ostree
+${ATOMIC} --assumeyes images delete -f busybox
 ${ATOMIC} pull --storage ostree docker.io/busybox
 ${ATOMIC} pull --storage ostree busybox
 ${ATOMIC} pull --storage ostree busybox > second.pull.out
@@ -271,7 +277,12 @@ ${ATOMIC} images prune
 ${ATOMIC} images list -f type=system --all > images.all.out
 assert_matches "<none>" images.all.out
 
-${ATOMIC} --assumeyes images delete -f atomic-test-system
+# Check to see if deleting a duplicate image will error
+OUTPUT=$(! ${ATOMIC} --assumeyes images delete -f atomic-test-system 2>&1)
+grep "Failed to delete Image atomic-test-system: has duplicate naming" <<< $OUTPUT
+
+# Now delete from ostree
+${ATOMIC} --assumeyes images delete --storage ostree atomic-test-system
 ${ATOMIC} images prune
 
 # Test there are not intermediate layers left layers now
@@ -281,3 +292,29 @@ assert_not_matches "<none>" images.all.out
 # Verify there are no branches left in the repository as well
 ostree --repo=${ATOMIC_OSTREE_REPO} refs > refs
 assert_not_matches "<none>" refs
+
+docker pull docker.io/busybox:latest
+
+teardown
+
+# Install from a docker tar file
+export NAME="test-dockertar-system-container-$$"
+${ATOMIC} install --name=${NAME} --set=RECEIVER=${SECRET} --system dockertar:/${WORK_DIR}/atomic-test-system.tar
+test -e /etc/tmpfiles.d/${NAME}.conf
+
+test -e ${ATOMIC_OSTREE_CHECKOUT_PATH}/${NAME}.0/${NAME}.service
+test -e ${ATOMIC_OSTREE_CHECKOUT_PATH}/${NAME}.0/tmpfiles-${NAME}.conf
+
+systemctl start ${NAME}
+
+teardown
+
+# Install from a docker local docker image
+export NAME="test-docker-system-container-$$"
+${ATOMIC} install --name=${NAME} --set=RECEIVER=${SECRET} --system docker:atomic-test-system
+test -e /etc/tmpfiles.d/${NAME}.conf
+
+test -e ${ATOMIC_OSTREE_CHECKOUT_PATH}/${NAME}.0/${NAME}.service
+test -e ${ATOMIC_OSTREE_CHECKOUT_PATH}/${NAME}.0/tmpfiles-${NAME}.conf
+
+systemctl start ${NAME}

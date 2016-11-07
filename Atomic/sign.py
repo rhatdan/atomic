@@ -3,7 +3,6 @@ from . import Atomic
 from . import discovery
 import os
 import tempfile
-import json
 
 try:
     from urlparse import urlparse #pylint: disable=import-error
@@ -77,11 +76,13 @@ class Sign(Atomic):
         for sign_image in images:
             registry, repo, image, tag, _ = util.Decompose(sign_image).all
             ri = discovery.RegistryInspect(registry, repo, image, tag, debug=self.args.debug, orig_input=sign_image)
-            manifest = ri.rc.manifest_json
+            ri.ping()
+            ri.get_manifest()
+            manifest = ri.rc.orig_manifest
 
             try:
                 manifest_file = tempfile.NamedTemporaryFile(mode="wb", delete=False)
-                manifest_file.write(json.dumps(manifest))
+                manifest_file.write(manifest)
                 manifest_file.close()
                 manifest_hash = str(util.skopeo_manifest_digest(manifest_file.name))
                 expanded_image_name = ri.assemble_fqdn(include_tag=True)
@@ -90,7 +91,6 @@ class Sign(Atomic):
                     if not os.path.exists(in_signature_path):
                         raise ValueError("The path {} does not exist".format(in_signature_path))
                     signature_path = in_signature_path
-
 
                 else:
                     reg, repo, _, _, _ = util.Decompose(expanded_image_name).all
@@ -116,8 +116,7 @@ class Sign(Atomic):
                     if not os.path.exists(signature_path):
                         raise ValueError("The signature path {} does not exist".format(signature_path))
 
-                sigstore_path = "{}/{}/{}@{}".format(signature_path, os.path.dirname(expanded_image_name),
-                                                     os.path.basename(expanded_image_name), manifest_hash)
+                sigstore_path = "{}/{}@{}".format(signature_path, expanded_image_name.rsplit(':', 1)[0], manifest_hash)
                 self.make_sig_dirs(sigstore_path)
                 sig_name = self.get_sig_name(sigstore_path)
                 fq_sig_path = os.path.join(sigstore_path, sig_name)
@@ -126,7 +125,7 @@ class Sign(Atomic):
                                      "overwrite it, please delete this file first")
 
                 util.skopeo_standalone_sign(expanded_image_name, manifest_file.name,
-                                            self.get_fingerprint(signer), fq_sig_path)
+                                            self.get_fingerprint(signer), fq_sig_path, debug=self.args.debug)
                 util.write_out("Created: {}".format(fq_sig_path))
 
             finally:
