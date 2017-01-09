@@ -665,10 +665,13 @@ class Atomic(object):
                 img += "/{}".format(repo)
             img += "/{}:{}".format(image, tag)
             return img
-        if not registry:
-            ri = RegistryInspect(registry, repo, image, tag, debug=self.args.debug, orig_input=self.image)
-            return ri.find_image_on_registry()
+        ri = RegistryInspect(registry, repo, image, tag, debug=self.args.debug, orig_input=self.image)
+        return ri.find_image_on_registry()
 
+    def remote_inspect(self, image=None):
+        if image == None:
+            image=self.image
+        return util.skopeo_inspect("docker://" + self.get_fq_image_name(image))
 
 class AtomicError(Exception):
     pass

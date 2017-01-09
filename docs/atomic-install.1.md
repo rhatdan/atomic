@@ -7,11 +7,13 @@ atomic-install - Execute Image Install Method
 # SYNOPSIS
 **atomic install**
 [**-h**|**--help**]
+[**--default**]
 [**--display**]
 [**-n**][**--name**[=*NAME*]]
 [**--rootfs**=*ROOTFS*]
 [**--set**=*NAME*=*VALUE*]
 [**--system**]
+[**--user**]
 IMAGE [ARG...]
 
 # DESCRIPTION
@@ -51,6 +53,11 @@ Any additional arguments will be appended to the command.
 **-h** **--help**
 Print usage statement
 
+**--default**
+Install a default container.  If container image has a label indicating
+container type, the --default flag will override the flag and install the
+container using the default method.
+
 **--display**
 Display the image's install options and environment variables
 populated into the install command.
@@ -84,11 +91,15 @@ Installing a system container consists of checking it the image by
 default under /var/lib/containers/atomic/ and generating the
 configuration files for runc and systemd.
 OSTree and runc are required for this feature to be available.
+Developers of container images can set the `atomic.type label` to `system`
+to cause atomic install to use the `--system` flag by default.
 
 **--user**
 If running as non-root, specify to install the image from the current
 OSTree repository and manage it through systemd and bubblewrap.
 OSTree and bwrap-oci are required for this feature to be available.
+Developers of container images can set the `atomic.type label` to `user`
+to cause atomic install to use the `--user` flag by default.
 
 # HISTORY
 January 2015, Originally compiled by Daniel Walsh (dwalsh at redhat dot com)

@@ -25,7 +25,7 @@ INSTALL_ARGS = ["run",
                 "-e", "CONFDIR=/host/etc/${NAME}",
                 "-e", "LOGDIR=/host/var/log/${NAME}",
                 "-e", "DATADIR=/host/var/lib/${NAME}",
-                "-e", "SYSTEMD_IGNORE_CHROOT=1", 
+                "-e", "SYSTEMD_IGNORE_CHROOT=1",
                 "--name", "${NAME}",
                 "${IMAGE}"]
 
@@ -53,13 +53,15 @@ def cli(subparser):
         runc_available = util.runc_available()
         if bwrap_oci_available or runc_available:
             system_xor_user = installp.add_mutually_exclusive_group()
+            system_xor_user.add_argument("--default", dest="default", action="store_true", default=False,
+                                         help=_("Install container image using default method."))
             if bwrap_oci_available:
                 system_xor_user.add_argument("--user", dest="user", action="store_true", default=False,
-                                             help=_("Flag to specify if user is non-root privileged."))
+                                             help=_("Install container image using user method."))
             if runc_available:
                 system_xor_user.add_argument("--system", dest="system",
                                              action='store_true', default=False,
-                                             help=_('install a system container'))
+                                             help=_("Install container image using system method."))
         installp.add_argument("--rootfs", dest="remote",
                               help=_("choose an existing exploded container/image to use "
                                      "its rootfs as a remote, read-only rootfs for the "
@@ -77,6 +79,13 @@ class Install(Atomic):
         super(Install, self).__init__()
 
     def install(self):
+        if not self.system and not self.user and not self.default:
+            image_type = util.get_label(self.remote_inspect(self.image), "atomic.type")
+            if image_type:
+                if image_type.lower() == "system":
+                    self.system = True
+                if image_type.lower() == "user":
+                    self.user = True
         if self._container_exists(self.name):
             raise ValueError("A container '%s' is already present" % self.name)
 
@@ -121,4 +130,3 @@ class Install(Atomic):
     @staticmethod
     def print_install():
         return "%s %s %s" % (util.default_docker(), " ".join(INSTALL_ARGS), "/usr/bin/INSTALLCMD")
-

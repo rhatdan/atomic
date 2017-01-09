@@ -54,6 +54,14 @@ def check_if_python2():
 input, is_python2 = check_if_python2() # pylint: disable=redefined-builtin
 
 
+def get_label(inspect, label):
+    cfg = inspect.get("Config", None)
+    if cfg:
+        labels = cfg.get("Labels", [])
+        if labels and label in labels:
+            return labels[label]
+    return ""
+
 def get_registries():
     registries = []
     with AtomicDocker() as c:
@@ -876,4 +884,3 @@ class Decompose(object):
     @property
     def all(self):
         return self._registry, self._repo, self._image, self._tag, self._digest
-
