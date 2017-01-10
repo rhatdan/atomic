@@ -3,7 +3,7 @@ try:
 except ImportError:
     from atomic import Atomic  # pylint: disable=relative-import
 from .trust import Trust
-from .util import skopeo_copy, get_atomic_config, Decompose, write_out, strip_port, is_insecure_registry
+from .util import skopeo_copy, get_atomic_config, Decompose, write_out, strip_port, is_insecure_registry, get_label
 
 ATOMIC_CONFIG = get_atomic_config()
 
@@ -14,7 +14,7 @@ def cli(subparser):
     pullp = subparser.add_parser("pull", help=_("pull latest image from a repository"),
                                  epilog="pull the latest specified image from a repository.")
     pullp.set_defaults(_class=Pull, func='pull_image')
-    pullp.add_argument("--storage", dest="storage", default=storage,
+    pullp.add_argument("--storage", dest="storage", default=None,
                        help=_("Specify the storage. Default is currently '%s'.  You can"
                               " change the default by editing /etc/atomic.conf and changing"
                               " the 'default_storage' field." % storage))
@@ -30,6 +30,7 @@ class Pull(Atomic):
         """
         super(Pull, self).__init__()
         self.policy_filename=policy_filename
+        self.default_storage = ATOMIC_CONFIG.get('default_storage', "docker")
 
     def pull_docker_image(self):
         self.ping()
@@ -62,6 +63,11 @@ class Pull(Atomic):
             "ostree" : self.syscontainers.pull_image,
             "docker" : self.pull_docker_image
         }
+
+        if not self.args.storage:
+            self.args.storage = get_label(self.remote_inspect(self.image), "atomic.storage")
+            if not self.args.storage:
+                self.args.storage = self.default_storage
 
         handler = handlers.get(self.args.storage)
         if handler is None:
