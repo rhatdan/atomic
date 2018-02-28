@@ -65,5 +65,5 @@ class Uninstall(Atomic):
 
     @staticmethod
     def print_uninstall():
-        return "%s %s %s" % (util.default_docker(), " ".join(INSTALL_ARGS), "/usr/bin/UNINSTALLCMD")
+        return "%s %s %s" % (util.default_runtime(), " ".join(INSTALL_ARGS), "/usr/bin/UNINSTALLCMD")
 

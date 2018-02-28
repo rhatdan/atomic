@@ -178,7 +178,7 @@ class Install(Atomic):
 
     @staticmethod
     def print_install():
-        return "%s %s %s" % (util.default_docker(), " ".join(INSTALL_ARGS), "/usr/bin/INSTALLCMD")
+        return "%s %s %s" % (util.default_runtime(), " ".join(INSTALL_ARGS), "/usr/bin/INSTALLCMD")
 
     @staticmethod
     def ostree_uri(image_name):

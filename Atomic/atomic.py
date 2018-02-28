@@ -55,7 +55,7 @@ class Atomic(object):
         self.images_cache = []
         self.images_all_cache = []
         self.active_containers = []
-        self.docker_cmd = None
+        self.runtime_cmd = None
         self.debug = False
         self.is_python2 = (int(sys.version[0])) < 3
         self.useTTY = True
@@ -74,10 +74,10 @@ class Atomic(object):
         except NoDockerDaemon:
             pass
 
-    def docker_binary(self):
-        if not self.docker_cmd:
-            self.docker_cmd = util.default_docker()
-        return self.docker_cmd
+    def runtime_binary(self):
+        if not self.runtime_cmd:
+            self.runtime_cmd = util.default_runtime()
+        return self.runtime_cmd
 
     def get_label(self, label, image=None):
         inspect = self._inspect_image(image)
@@ -253,6 +253,9 @@ class Atomic(object):
 
     def gen_cmd(self, cargs):
         args = []
+        # Replace "docker" command with default runtime
+        if cargs[0] == "docker":
+            cargs[0] = util.default_runtime()
         for c in cargs:
             if c == "IMAGE":
                 args.append(self.image)

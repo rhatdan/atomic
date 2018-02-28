@@ -27,7 +27,7 @@ def export_docker(graph, export_location, force):
                     raise ValueError("Please delete dangling images before running atomic storage export")
 
             util.write_out("Deleting dangling images")
-            util.check_call([util.default_docker(), "rmi", "-f"]+dangling_images)
+            util.check_call([util.default_runtime(), "rmi", "-f"]+dangling_images)
 
         #Save the docker storage driver
         storage_driver = client.info()["Driver"]
@@ -66,7 +66,7 @@ def export_images(export_location):
         tags = " ".join(images[Id])
         util.write_out("Exporting image: {0}".format(Id[:12]))
         with open(export_location + '/images/' + Id, 'w') as f:
-            util.check_call([util.default_docker(), "save", tags], stdout=f)
+            util.check_call([util.default_runtime(), "save", tags], stdout=f)
 
 def export_containers(graph, export_location):
     """

@@ -124,8 +124,8 @@ class Run(Atomic):
 
     @staticmethod
     def print_run():
-        return "%s run %s" % (util.default_docker(), " ".join(RUN_ARGS))
+        return "%s run %s" % (util.default_runtime(), " ".join(RUN_ARGS))
 
     @staticmethod
     def print_spc():
-        return "%s run %s" % (util.default_docker(), " ".join(SPC_ARGS))
+        return "%s run %s" % (util.default_runtime(), " ".join(SPC_ARGS))

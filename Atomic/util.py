@@ -519,17 +519,17 @@ def get_scanners():
                 pass
     return scanners
 
-def default_docker():
-    if not default_docker.cache:
+def default_runtime():
+    if not default_runtime.cache:
         atomic_config = get_atomic_config()
         if os.path.exists("/var/lib/docker"):
-            docker = "docker"
+            runtime = "docker"
         else:
-            docker = "docker-latest"
+            runtime = "podman"
 
-        default_docker.cache = atomic_config.get('default_docker', docker)
-    return default_docker.cache
-default_docker.cache = None
+        default_runtime.cache = atomic_config.get('default_docker', runtime)
+    return default_runtime.cache
+default_runtime.cache = None
 
 def default_docker_lib():
     try:

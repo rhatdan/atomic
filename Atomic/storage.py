@@ -143,11 +143,12 @@ class Storage(Atomic):
                 raise ValueError("You must specify the --graph storage path to reset /var/lib/docker or /var/lib/docker-latest")
             if os.path.exists("/var/lib/docker"):
                 self.graphdir = "/var/lib/docker"
-            else:
-                if os.path.exists("/var/lib/docker-latest"):
+            else if os.path.exists("/var/lib/docker-latest"):
                     self.graphdir = "/var/lib/docker-latest"
-                else:
-                    raise ValueError("Could not find any default graph storage path. Specify one using --graph option")
+            else if os.path.exists("/var/lib/containers/storage"):
+                    self.graphdir = "/var/lib/containers/storage"
+            else:
+                raise ValueError("Could not find any default graph storage path. Specify one using --graph option")
 
     def reset(self):
         root=self.graphdir
